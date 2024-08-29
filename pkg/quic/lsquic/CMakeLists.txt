@@ -1,0 +1,30 @@
+CMAKE_MINIMUM_REQUIRED(VERSION 3.5)
+PROJECT(http-lsquic-adapter C)
+
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+set(CC gcc-9)
+set(CXX g++-9)
+
+IF(CMAKE_BUILD_TYPE STREQUAL "")
+    SET(CMAKE_BUILD_TYPE Debug)
+ENDIF()
+MESSAGE(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
+IF (CMAKE_BUILD_TYPE STREQUAL Debug)
+    SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -O0")
+    SET(BUILD_LSQUIC true)
+ENDIF()
+SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} $ENV{EXTRA_CFLAGS}")
+
+IF(BUILD_LSQUIC)
+    MESSAGE(STATUS "Building lsquic:")
+    ADD_SUBDIRECTORY(boringssl)
+    INCLUDE_DIRECTORIES(boringssl/include)
+    INCLUDE_DIRECTORIES(lsquic/include)
+    INCLUDE_DIRECTORIES(lsquic/src/liblsquic)
+    ADD_SUBDIRECTORY(lsquic/src/liblsquic)
+    INCLUDE_DIRECTORIES(include)
+    ADD_LIBRARY(lsquic_adapter STATIC ./src/server.c)
+ENDIF()
+
+MESSAGE(STATUS "Compiler flags: ${CMAKE_C_FLAGS}")
