@@ -1,5 +1,5 @@
 echo "Cloning dependencies repositories"
-#git submodule update --init --recursive
+git submodule update --init --recursive
 ROOTDIR=${PWD}
 LSQUIC=$ROOTDIR
 LSQUIC+="/lsquic/"
