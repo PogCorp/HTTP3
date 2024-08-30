@@ -10,6 +10,7 @@ typedef struct server {
     ev_timer time_watcher;
     struct ev_loop* event_loop;
     struct sockaddr_storage local_address;
+    struct lsquic_stream_if stream_callbacks;
     LsquicEngine* engine;
 } Server;
 
