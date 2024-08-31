@@ -4,6 +4,7 @@
 #include <sys/socket.h>
 #pragma once
 
+// TODO: write an interface type to comunicate with Go
 typedef struct server {
     int socket_descriptor;
     ev_io socket_watcher;
@@ -12,6 +13,7 @@ typedef struct server {
     struct sockaddr_storage local_address;
     struct lsquic_stream_if stream_callbacks;
     LsquicEngine* engine;
+    // interface QuicAdapter adapter_callbacks;
 } Server;
 
 typedef struct {
@@ -23,10 +25,14 @@ typedef struct {
     unsigned char* buffer;
 } server_stream_ctx;
 
+/* LSQUIC Callbacks */
+
 /*
- * Creates a new server and attaches it to the engine
+ * Creates a new server for the provided parameters
+ *
+ * consumer must check errno to ensure that the configuration was appropriate and server can listen
  * */
-void newServer(Server* server, const char* host_name, char* port, const char* certkeym, const char* keyfile, LsquicEngine* engine);
+void newServer(Server* server, const char* host_name, char* port, const char* certkeym, const char* keyfile, const char* keylog);
 
 /*
  * Callback to process the event of a new connection to the server
