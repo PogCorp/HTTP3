@@ -3,12 +3,16 @@
 #include "server.h"
 #include "address.c"
 #include "lsquic.h"
+#include "lsquic_types.h"
 #include "openssl/ssl.h"
 #include <arpa/inet.h>
 #include <assert.h>
 #include <errno.h>
+#include <ev.h>
 #include <netinet/in.h>
+#include <stdint.h>
 #include <stdlib.h>
+#include <sys/types.h>
 #include <time.h>
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
@@ -25,8 +29,10 @@ void reset_timer(EV_P_ ev_timer* timer, int revents);
 static SSL_CTX* server_get_ssl_ctx(void* peer_ctx, const struct sockaddr* address);
 /* connection methods */
 static int server_packets_out(void* packets_out_ctx, const struct lsquic_out_spec* specs, unsigned count);
+/* extract connection id into hex string */
+void extract_cid(char* cid_string, const lsquic_cid_t* cid);
 
-static struct lsquic_stream_if interface = {
+static struct lsquic_stream_if stream_interface = {
     .on_new_conn = server_on_new_connection,
     .on_conn_closed = server_on_closed_connection,
     .on_new_stream = server_on_new_stream,
@@ -42,17 +48,31 @@ void newServer(Server* server, const char* host_name, char* port, const char* ce
     const int port_num = htons(atoi(port));
 
     get_address_info(host_name, port_num, &address);
+    server->event_loop = EV_DEFAULT;
 
     struct lsquic_engine_api engine_api;
+    struct lsquic_engine_settings* settings = malloc(sizeof(struct lsquic_engine_settings));
     memset(&engine_api, 0, sizeof(engine_api));
     engine_api.ea_packets_out = server_packets_out;
     engine_api.ea_packets_out_ctx = server;
     engine_api.ea_get_ssl_ctx = server_get_ssl_ctx;
-    engine_api.ea_stream_if = &interface;
+    engine_api.ea_stream_if = &stream_interface;
     engine_api.ea_stream_if_ctx = server;
+    engine_api.ea_settings = settings;
+    server->engine->quic = lsquic_engine_new(LSENG_SERVER, &engine_api);
+    server->time_watcher.data = server;
+    server->socket_watcher.data = server;
 }
 
 /* connection methods */
+
+void serverListen(Server* server)
+{
+    ev_run(server->event_loop, 0);
+    lsquic_engine_destroy(server->engine->quic);
+    lsquic_global_cleanup();
+}
+
 static void
 setup_control_message(struct msghdr* msg, enum ctl_what cw,
     const struct lsquic_out_spec* spec, unsigned char* buf, size_t bufsz)
@@ -157,7 +177,7 @@ static int server_packets_out(void* packets_out_ctx, const struct lsquic_out_spe
 
         socket_response = sendmsg(fd, &message, 0);
         if (socket_response < 0) {
-            log("sendmsg failed: %s", strerror(errno));
+            Log("sendmsg failed: %s", strerror(errno));
             break;
         }
         ++n;
@@ -165,7 +185,7 @@ static int server_packets_out(void* packets_out_ctx, const struct lsquic_out_spe
 
     // TODO: not ideal way to handle this
     if (n < count)
-        log("could not send all of them");
+        Log("could not send all of them");
 
     if (n > 0)
         return n;
@@ -186,18 +206,18 @@ SSL_CTX* extract_ssl_context(const char* certificate, const char* keyfile)
 {
     SSL_CTX* s_ssl_ctx = SSL_CTX_new(TLS_method());
     if (!s_ssl_ctx) {
-        log("SSL_CTX_new failed");
+        Log("SSL_CTX_new failed");
         goto failure;
     }
     SSL_CTX_set_min_proto_version(s_ssl_ctx, TLS1_3_VERSION);
     SSL_CTX_set_max_proto_version(s_ssl_ctx, TLS1_3_VERSION);
     SSL_CTX_set_default_verify_paths(s_ssl_ctx);
     if (1 != SSL_CTX_use_certificate_chain_file(s_ssl_ctx, certificate)) {
-        log("SSL_CTX_use_certificate_chain_file failed");
+        Log("SSL_CTX_use_certificate_chain_file failed");
         goto failure;
     }
     if (1 != SSL_CTX_use_PrivateKey_file(s_ssl_ctx, keyfile, SSL_FILETYPE_PEM)) {
-        log("SSL_CTX_use_PrivateKey_file failed");
+        Log("SSL_CTX_use_PrivateKey_file failed");
         goto failure;
     }
     return s_ssl_ctx;
@@ -215,6 +235,10 @@ lsquic_conn_ctx_t* server_on_new_connection(void* stream_if_ctx, struct lsquic_c
 
 void server_on_closed_connection(lsquic_conn_t* conn)
 {
+    const lsquic_cid_t* cid = lsquic_conn_id(conn);
+    char cid_string[0x15];
+    extract_cid(cid_string, cid);
+    Log("Connection %s closed", cid_string);
 }
 
 lsquic_stream_ctx_t* server_on_new_stream(void* stream_if_ctx, struct lsquic_stream* stream)
@@ -224,6 +248,32 @@ lsquic_stream_ctx_t* server_on_new_stream(void* stream_if_ctx, struct lsquic_str
 
 void server_on_read(struct lsquic_stream* stream, lsquic_stream_ctx_t* h)
 {
+    server_stream_ctx* const stream_data = (void*)h;
+    ssize_t nread;
+    unsigned char buf[1];
+
+    nread = lsquic_stream_read(stream, buf, sizeof(buf));
+    if (nread > 0) {
+        stream_data->buffer[stream_data->total_size] = buf[0];
+        lsquic_stream_id_t id = lsquic_stream_id(stream);
+        ++stream_data->total_size;
+        if (buf[0] == (unsigned char)'\n') {
+            Log("read newline or filled buffer, switch to writing");
+            // TODO: callback to treat data
+            lsquic_stream_wantread(stream, 0);
+            // lsquic_stream_wantwrite(stream, 1); // TODO: write back when it is not a final response
+        }
+    } else if (nread == 0) {
+        Log("read EOF");
+        // TODO: (all data read) complete request and relay response, then shutdown stream
+        lsquic_stream_shutdown(stream, 0);
+        if (stream_data->total_size)
+            lsquic_stream_wantwrite(stream, 1);
+    } else {
+        /* This should not happen */
+        Log("error reading from stream (errno: %d) -- abort connection", errno);
+        lsquic_conn_abort(lsquic_stream_conn(stream));
+    }
 }
 
 void server_on_write(struct lsquic_stream* stream, lsquic_stream_ctx_t* h)
@@ -240,9 +290,9 @@ void process_ticker(Server* server)
     ev_tstamp timeout;
 
     ev_timer_stop(server->event_loop, &server->time_watcher);
-    lsquic_engine_process_conns(server->engine->quic_engine);
+    lsquic_engine_process_conns(server->engine->quic);
 
-    if (lsquic_engine_earliest_adv_tick(server->engine->quic_engine, &time_diff)) {
+    if (lsquic_engine_earliest_adv_tick(server->engine->quic, &time_diff)) {
         if (time_diff >= LSQUIC_DF_CLOCK_GRANULARITY)
             timeout = (ev_tstamp)time_diff / 1000000;
         else if (time_diff <= 0)
@@ -257,4 +307,13 @@ void process_ticker(Server* server)
 void reset_timer(EV_P_ ev_timer* timer, int revents)
 {
     process_ticker(timer->data);
+}
+
+void extract_cid(char* cid_string, const lsquic_cid_t* cid)
+{
+    const uint_fast8_t len = cid->len;
+    for (int i = 0; i < (int)len; i++) {
+        sprintf(cid_string + i, "0x%02x", cid->buf[i]);
+    }
+    cid_string[(int)len] = '\0';
 }
