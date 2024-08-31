@@ -41,27 +41,49 @@ static struct lsquic_stream_if stream_interface = {
     .on_close = server_on_close,
 };
 
-void newServer(Server* server, const char* host_name, char* port, const char* certkeym, const char* keyfile, LsquicEngine* engine)
+// NOTE: There should be a wrapper func to GO here
+void newServer(Server* server, const char* host_name, char* port, const char* certkeym, const char* keyfile, const char* keylog)
 {
+    // resolving address
     SocketAddress address;
-
     const int port_num = htons(atoi(port));
-
     get_address_info(host_name, port_num, &address);
     server->event_loop = EV_DEFAULT;
 
+    // registering callbacks and starting engine
     struct lsquic_engine_api engine_api;
-    struct lsquic_engine_settings* settings = malloc(sizeof(struct lsquic_engine_settings));
+    struct lsquic_engine_settings settings; // TODO: missing alpn and ecn values (might add congestion algorithma as well)
+    char errbuf[0x100];
     memset(&engine_api, 0, sizeof(engine_api));
     engine_api.ea_packets_out = server_packets_out;
     engine_api.ea_packets_out_ctx = server;
     engine_api.ea_get_ssl_ctx = server_get_ssl_ctx;
     engine_api.ea_stream_if = &stream_interface;
     engine_api.ea_stream_if_ctx = server;
-    engine_api.ea_settings = settings;
+    engine_api.ea_settings = &settings;
+    if (0 != lsquic_engine_check_settings(&settings, LSENG_SERVER, errbuf, sizeof(errbuf))) {
+        errno = EINVAL;
+        Log("invalid settings passed: %s", errbuf);
+        return;
+    }
+
     server->engine->quic = lsquic_engine_new(LSENG_SERVER, &engine_api);
+    if (server->engine->quic == NULL) {
+        // TODO: select a more appropriate errno value here
+        errno = ENOPROTOOPT;
+        Log("engine could not be created");
+        return;
+    }
     server->time_watcher.data = server;
     server->socket_watcher.data = server;
+
+    // TODO: missing keylog configuration
+
+    // registering socket file descriptor for event read
+    ev_io_init(&server->socket_watcher, server_on_read, server->socket_descriptor, EV_READ);
+    ev_io_start(server->event_loop, &server->socket_watcher);
+
+    ev_run(server->event_loop, 0);
 }
 
 /* connection methods */
@@ -199,6 +221,7 @@ static int server_packets_out(void* packets_out_ctx, const struct lsquic_out_spe
 
 static SSL_CTX* server_get_ssl_ctx(void* peer_ctx, const struct sockaddr* address)
 {
+    // TODO: find a way to use SNI to find the ssl protocol here
     return NULL; // TODO: in the folder /bin of lsquic the prog.c file can help on implementation
 }
 
@@ -230,6 +253,10 @@ failure:
 
 lsquic_conn_ctx_t* server_on_new_connection(void* stream_if_ctx, struct lsquic_conn* conn)
 {
+    const lsquic_cid_t* cid = lsquic_conn_id(conn);
+    char cid_string[0x15];
+    extract_cid(cid_string, cid);
+    Log("new connection %s", cid_string);
     return NULL;
 }
 
@@ -312,8 +339,8 @@ void reset_timer(EV_P_ ev_timer* timer, int revents)
 void extract_cid(char* cid_string, const lsquic_cid_t* cid)
 {
     const uint_fast8_t len = cid->len;
-    for (int i = 0; i < (int)len; i++) {
-        sprintf(cid_string + i, "0x%02x", cid->buf[i]);
+    for (int i = 0, j = 0; i < (int)len; i++, j += 2) {
+        sprintf(cid_string + j, "%02x", cid->buf[i]);
     }
-    cid_string[(int)len] = '\0';
+    cid_string[(int)len << 1] = '\0';
 }
