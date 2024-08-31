@@ -20,7 +20,7 @@ static void get_address_info(const char* host_name, int port_num, SocketAddress*
         address->addr6.sin6_family = AF_INET6;
         address->addr6.sin6_port = port_num;
     } else {
-        log("passed on an valid IP address: '%s'", host_name);
+        Log("passed on an valid IP address: '%s'", host_name);
         exit(EXIT_FAILURE);
     }
 }

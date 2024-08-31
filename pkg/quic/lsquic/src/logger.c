@@ -4,7 +4,7 @@
 
 static FILE* log_stream = NULL;
 
-static void log(const char* fmt, ...)
+static void Log(const char* fmt, ...)
 {
     if (log_stream) {
         va_list ap;

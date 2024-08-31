@@ -14,6 +14,15 @@ typedef struct server {
     LsquicEngine* engine;
 } Server;
 
+typedef struct {
+    // total size of payload
+    size_t total_size;
+    // offset of written/read payload
+    off_t offset;
+    // payload data
+    unsigned char* buffer;
+} server_stream_ctx;
+
 /*
  * Creates a new server and attaches it to the engine
  * */
