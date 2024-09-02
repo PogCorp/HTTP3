@@ -38,6 +38,15 @@ static bool add_alpn(char* alpn, char* proto);
 void handle_send_failure(Server* server, int fd);
 void schedule_resend(EV_P_ ev_io* ev_write, int revents);
 
+// TODO: write a helper function to format sni from hostname, port, certkey,
+// keyfile
+//
+//
+// TODO: certify that the get_address_info function works correctly since it
+// expects ip
+//      address instead of a https scheme, therefore there might be a need to
+//      resolve the ip
+
 // NOTE: There should be a wrapper func to GO here
 bool new_server(
     Server* server,
