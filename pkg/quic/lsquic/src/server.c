@@ -1,38 +1,48 @@
 // NOTE: In order to access struct in6_pktinfo the define bellow is necessary
 #define _GNU_SOURCE
-#include "server.h"
-#include "address.c"
-#include "lsquic.h"
-#include "lsquic_types.h"
-#include "openssl/ssl.h"
 #include <arpa/inet.h>
 #include <assert.h>
 #include <errno.h>
 #include <ev.h>
+#include <linux/limits.h>
 #include <netinet/in.h>
+#include <openssl/ssl.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <sys/types.h>
 #include <time.h>
 
+#include "address.c"
+#include "lsquic.h"
+#include "lsquic_types.h"
+#include "server.h"
+
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 
 // TODO: piece extracted from tut.c, determine what this is
 enum ctl_what {
-    CW_SENDADDR = 1 << 0,
-    CW_ECN = 1 << 1,
+  CW_SENDADDR = 1 << 0,
+  CW_ECN = 1 << 1,
 };
 
 /* process ticker */
-void reset_timer(EV_P_ ev_timer* timer, int revents);
+void reset_timer(EV_P_ ev_timer *timer, int revents);
 /* ssl configuration */
-static SSL_CTX* server_get_ssl_ctx(void* peer_ctx, const struct sockaddr* address);
+static SSL_CTX *server_get_ssl_ctx(void *peer_ctx,
+                                   const struct sockaddr *address);
 /* connection methods */
-static int server_packets_out(void* packets_out_ctx, const struct lsquic_out_spec* specs, unsigned count);
+static int server_packets_out(void *packets_out_ctx,
+                              const struct lsquic_out_spec *specs,
+                              unsigned count);
 /* extract connection id into hex string */
-void extract_cid(char* cid_string, const lsquic_cid_t* cid);
+void extract_cid(char *cid_string, const lsquic_cid_t *cid);
 
-static struct lsquic_stream_if stream_interface = {
+/* server keylogging */
+static void keylog_close(void *handle);
+static void *keylog_open(void *ctx, lsquic_conn_t *conn);
+static void keylog_log_line(void *handle, const char *line);
+
+static const struct lsquic_stream_if stream_interface = {
     .on_new_conn = server_on_new_connection,
     .on_conn_closed = server_on_closed_connection,
     .on_new_stream = server_on_new_stream,
@@ -41,43 +51,75 @@ static struct lsquic_stream_if stream_interface = {
     .on_close = server_on_close,
 };
 
+// TODO: write a helper function to format sni from hostname, port, certkey,
+// keyfile
+//
+//
+// TODO: certify that the get_address_info function works correctly since it
+// expects ip
+//      address instead of a https scheme, therefore there might be a need to
+//      resolve the ip
+
 // NOTE: There should be a wrapper func to GO here
-void newServer(Server* server, const char* host_name, char* port, const char* certkeym, const char* keyfile, const char* keylog)
-{
-    // resolving address
-    SocketAddress address;
-    const int port_num = htons(atoi(port));
-    get_address_info(host_name, port_num, &address);
-    server->event_loop = EV_DEFAULT;
+void newServer(Server *server, const char *host_name, char *port,
+               const char *certfile, const char *keyfile, const char *keylog) {
+  // initialize every field with default 0
+  memset(server, 0, sizeof(Server));
+  // resolving address
+  SocketAddress address;
+  const int port_num = htons(atoi(port));
+  get_address_info(host_name, port_num, &address);
+  server->event_loop = EV_DEFAULT;
 
-    // registering callbacks and starting engine
-    struct lsquic_engine_api engine_api;
-    struct lsquic_engine_settings settings; // TODO: missing alpn and ecn values (might add congestion algorithma as well)
-    char errbuf[0x100];
-    memset(&engine_api, 0, sizeof(engine_api));
-    engine_api.ea_packets_out = server_packets_out;
-    engine_api.ea_packets_out_ctx = server;
-    engine_api.ea_get_ssl_ctx = server_get_ssl_ctx;
-    engine_api.ea_stream_if = &stream_interface;
-    engine_api.ea_stream_if_ctx = server;
-    engine_api.ea_settings = &settings;
-    if (0 != lsquic_engine_check_settings(&settings, LSENG_SERVER, errbuf, sizeof(errbuf))) {
-        errno = EINVAL;
-        Log("invalid settings passed: %s", errbuf);
-        return;
-    }
+  /* certificates */
+  server->certificates = lsquic_hash_create();
 
-    server->engine->quic = lsquic_engine_new(LSENG_SERVER, &engine_api);
-    if (server->engine->quic == NULL) {
-        // TODO: select a more appropriate errno value here
-        errno = ENOPROTOOPT;
-        Log("engine could not be created");
-        return;
-    }
-    server->time_watcher.data = server;
-    server->socket_watcher.data = server;
+  // registering callbacks and starting engine
+  char errbuf[0x100];
+  struct lsquic_engine_api engine_api;
+  struct lsquic_engine_settings
+      settings; // TODO: missing alpn and ecn values (might add congestion
+                // algorithma as well)
+  settings.es_ecn = LSQUIC_DF_ECN;
 
-    // TODO: missing keylog configuration
+  memset(&engine_api, 0, sizeof(engine_api));
+  engine_api.ea_packets_out = server_packets_out;
+  engine_api.ea_packets_out_ctx = server;
+  engine_api.ea_get_ssl_ctx = server_get_ssl_ctx;
+  engine_api.ea_stream_if = &stream_interface;
+  engine_api.ea_stream_if_ctx = server;
+  engine_api.ea_settings = &settings;
+  engine_api.ea_lookup_cert; // TODO: use test_cert.c example of how to look at
+                             // certificates
+  if (0 != lsquic_engine_check_settings(&settings, LSENG_SERVER, errbuf,
+                                        sizeof(errbuf))) {
+    errno = EINVAL;
+    Log("invalid settings passed: %s", errbuf);
+    return;
+  }
+
+  // TODO: missing keylog configuration
+  const unsigned long keylog_len = strlen(keylog);
+  server->keylog_path = malloc(sizeof(char) * keylog_len);
+  memcpy(server->keylog_path, keylog, keylog_len);
+
+  server->engine.quic = lsquic_engine_new(LSENG_SERVER, &engine_api);
+  if (server->engine.quic == NULL) {
+    // TODO: select a more appropriate errno value here
+    errno = ENOPROTOOPT;
+    Log("engine could not be created");
+    return;
+  }
+  server->time_watcher.data = server;
+  server->socket_watcher.data = server;
+
+  // registering socket file descriptor for event read
+  ev_io_init(&server->socket_watcher, server_on_read, server->socket_descriptor,
+             EV_READ);
+  ev_io_start(server->event_loop, &server->socket_watcher);
+
+  ev_run(server->event_loop, 0);
+}
 
     // registering socket file descriptor for event read
     ev_io_init(&server->socket_watcher, server_on_read, server->socket_descriptor, EV_READ);
@@ -88,11 +130,14 @@ void newServer(Server* server, const char* host_name, char* port, const char* ce
 
 /* connection methods */
 
-void serverListen(Server* server)
-{
-    ev_run(server->event_loop, 0);
-    lsquic_engine_destroy(server->engine->quic);
-    lsquic_global_cleanup();
+void serverListen(Server *server) {
+  ev_run(server->event_loop, 0);
+  ev_io_stop(server->event_loop, &server->socket_watcher);
+  ev_timer_stop(server->event_loop, &server->time_watcher);
+  ev_loop_destroy(server->event_loop);
+  lsquic_engine_destroy(server->engine.quic);
+  lsquic_global_cleanup();
+  free(server->keylog_path);
 }
 
 static void
@@ -251,21 +296,20 @@ failure:
 
 /* stream methods */
 
-lsquic_conn_ctx_t* server_on_new_connection(void* stream_if_ctx, struct lsquic_conn* conn)
-{
-    const lsquic_cid_t* cid = lsquic_conn_id(conn);
-    char cid_string[0x15];
-    extract_cid(cid_string, cid);
-    Log("new connection %s", cid_string);
-    return NULL;
+lsquic_conn_ctx_t *server_on_new_connection(void *stream_if_ctx,
+                                            struct lsquic_conn *conn) {
+  const lsquic_cid_t *cid = lsquic_conn_id(conn);
+  char cid_string[0x29];
+  extract_cid(cid_string, cid);
+  Log("new connection %s", cid_string);
+  return NULL;
 }
 
-void server_on_closed_connection(lsquic_conn_t* conn)
-{
-    const lsquic_cid_t* cid = lsquic_conn_id(conn);
-    char cid_string[0x15];
-    extract_cid(cid_string, cid);
-    Log("Connection %s closed", cid_string);
+void server_on_closed_connection(lsquic_conn_t *conn) {
+  const lsquic_cid_t *cid = lsquic_conn_id(conn);
+  char cid_string[0x29];
+  extract_cid(cid_string, cid);
+  Log("Connection %s closed", cid_string);
 }
 
 lsquic_stream_ctx_t* server_on_new_stream(void* stream_if_ctx, struct lsquic_stream* stream)
@@ -311,36 +355,37 @@ void server_on_close(struct lsquic_stream* stream, lsquic_stream_ctx_t* h)
 {
 }
 
-void process_ticker(Server* server)
-{
-    int time_diff;
-    ev_tstamp timeout;
+void process_ticker(Server *server) {
+  int time_diff;
+  ev_tstamp timeout;
 
-    ev_timer_stop(server->event_loop, &server->time_watcher);
-    lsquic_engine_process_conns(server->engine->quic);
+  ev_timer_stop(server->event_loop, &server->time_watcher);
+  lsquic_engine_process_conns(server->engine.quic);
 
-    if (lsquic_engine_earliest_adv_tick(server->engine->quic, &time_diff)) {
-        if (time_diff >= LSQUIC_DF_CLOCK_GRANULARITY)
-            timeout = (ev_tstamp)time_diff / 1000000;
-        else if (time_diff <= 0)
-            timeout = 0.0;
-        else
-            timeout = (ev_tstamp)LSQUIC_DF_CLOCK_GRANULARITY / 1000000;
-        ev_timer_init(&server->time_watcher, reset_timer, timeout, 0.);
-        ev_timer_start(server->event_loop, &server->time_watcher);
-    }
+  if (lsquic_engine_earliest_adv_tick(server->engine.quic, &time_diff)) {
+    if (time_diff >= LSQUIC_DF_CLOCK_GRANULARITY)
+      timeout = (ev_tstamp)time_diff / 1000000;
+    else if (time_diff <= 0)
+      timeout = 0.0;
+    else
+      timeout = (ev_tstamp)LSQUIC_DF_CLOCK_GRANULARITY / 1000000;
+    ev_timer_init(&server->time_watcher, reset_timer, timeout, 0.);
+    ev_timer_start(server->event_loop, &server->time_watcher);
+  }
 }
 
-void reset_timer(EV_P_ ev_timer* timer, int revents)
-{
-    process_ticker(timer->data);
+void reset_timer(EV_P_ ev_timer *timer, int revents) {
+  process_ticker(timer->data);
 }
 
-void extract_cid(char* cid_string, const lsquic_cid_t* cid)
-{
-    const uint_fast8_t len = cid->len;
-    for (int i = 0, j = 0; i < (int)len; i++, j += 2) {
-        sprintf(cid_string + j, "%02x", cid->buf[i]);
-    }
-    cid_string[(int)len << 1] = '\0';
+// FIXME: (DEPRECATED) the function lsquic_hexstr already does this
+void extract_cid(char *cid_string, const lsquic_cid_t *cid) {
+  static const char byte2char[] = "0123456789ABCDEF";
+  uint_fast8_t i;
+
+  for (i = 0; i < cid->len; ++i) {
+    cid_string[i * 2 + 0] = byte2char[cid->idbuf[i] >> 4];
+    cid_string[i * 2 + 1] = byte2char[cid->idbuf[i] & 0xF];
+  }
+  cid_string[i << 1] = '\0';
 }
