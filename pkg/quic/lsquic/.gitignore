@@ -45,6 +45,3 @@ CTestTestfile.cmake
 _deps
 CMakeUserPresets.json
 .cache
-
-# clang
-.clang-format
