@@ -7,6 +7,11 @@
 #include "logger.h"
 
 // TODO: add the alpn setter in the server.c
+SSL_CTX* get_ssl_ctx(void* peer_ctx, const struct sockaddr* _)
+{
+    SSL_CTX* ssl_ctx = (SSL_CTX*)peer_ctx;
+    return ssl_ctx;
+}
 
 // TODO: arg must be set to the server alpn context
 int select_alpn_callback(SSL* ssl, const unsigned char** out,

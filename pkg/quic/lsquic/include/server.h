@@ -1,3 +1,4 @@
+#include "openssl/base.h"
 #include <ev.h>
 #include <sys/queue.h>
 #include <sys/socket.h>
