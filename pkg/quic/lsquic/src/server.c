@@ -1,5 +1,6 @@
 // NOTE: In order to access struct in6_pktinfo the define bellow is necessary
 #define _GNU_SOURCE
+#include "openssl/base.h"
 #include <assert.h>
 #include <errno.h>
 #include <ev.h>
@@ -10,6 +11,8 @@
 #include "cert.h"
 #include "keylog.h"
 #include "lsquic.h"
+#include "lsquic_int_types.h"
+#include "lsquic_util.h"
 #include "server.h"
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
@@ -28,8 +31,8 @@ static SSL_CTX* server_get_ssl_ctx(void* peer_ctx,
 static int server_packets_out(void* packets_out_ctx,
     const struct lsquic_out_spec* specs,
     unsigned count);
-/* extract connection id into hex string */
-void extract_cid(char* cid_string, const lsquic_cid_t* cid);
+/* add alpn value */
+static void add_alpn(char* alpn, char* proto);
 
 static const struct lsquic_stream_if stream_interface = {
     .on_new_conn = server_on_new_connection,
@@ -59,9 +62,7 @@ void newServer(Server* server, const char* keylog)
     // registering callbacks and starting engine
     char errbuf[0x100];
     struct lsquic_engine_api engine_api;
-    struct lsquic_engine_settings
-        settings; // TODO: missing alpn and ecn values (might add congestion
-                  // algorithm as well)
+    struct lsquic_engine_settings settings;
     settings.es_ecn = LSQUIC_DF_ECN;
 
     memset(&engine_api, 0, sizeof(engine_api));
@@ -71,6 +72,7 @@ void newServer(Server* server, const char* keylog)
     engine_api.ea_stream_if = &stream_interface;
     engine_api.ea_stream_if_ctx = server;
     engine_api.ea_settings = &settings;
+    engine_api.ea_get_ssl_ctx = get_ssl_ctx;
 
     /* certificates */
     server->certificates = lsquic_hash_create();
@@ -204,7 +206,6 @@ static int server_packets_out(void* packets_out_ctx,
     struct msghdr message;
     enum cmsg_flags cw;
     union {
-        // TODO: revise this tut.c union
         /* cmsg(3) recommends union for proper alignment */
         unsigned char buf[CMSG_SPACE(MAX(sizeof(struct in_pktinfo),
                               sizeof(struct in6_pktinfo)))
@@ -261,12 +262,32 @@ static int server_packets_out(void* packets_out_ctx,
 static SSL_CTX* server_get_ssl_ctx(void* peer_ctx,
     const struct sockaddr* address)
 {
-    // TODO: find a way to use SNI to find the ssl protocol here
-    return NULL; // TODO: in the folder /bin of lsquic the prog.c file can help on
-                 // implementation
+    SSL_CTX* ssl_ctx = (SSL_CTX*)peer_ctx;
+    return ssl_ctx;
 }
 
-SSL_CTX* extract_ssl_context(const char* certificate, const char* keyfile)
+bool set_ssl_ctx(Server* server, const char* keylog_dir)
+{
+    unsigned char ticket_keys[48];
+
+    server->ssl_ctx = SSL_CTX_new(TLS_method());
+    if (!server->ssl_ctx) {
+        Log("failed to instatiate new SSL_CTX");
+        return false;
+    }
+
+    SSL_CTX_set_min_proto_version(server->ssl_ctx, TLS1_3_VERSION);
+    SSL_CTX_set_max_proto_version(server->ssl_ctx, TLS1_3_VERSION);
+    SSL_CTX_set_default_verify_paths(server->ssl_ctx);
+
+    if (keylog_dir)
+        SSL_CTX_set_keylog_callback(server->ssl_ctx, keylog_log_line);
+
+    // TODO: look for certificate resumption
+    return 0;
+}
+
+SSL_CTX* extract_ssl_certificate(const char* certificate, const char* keyfile)
 {
     SSL_CTX* s_ssl_ctx = SSL_CTX_new(TLS_method());
     if (!s_ssl_ctx) {
@@ -297,7 +318,7 @@ lsquic_conn_ctx_t* server_on_new_connection(void* stream_if_ctx,
 {
     const lsquic_cid_t* cid = lsquic_conn_id(conn);
     char cid_string[0x29];
-    extract_cid(cid_string, cid);
+    lsquic_hexstr(cid->idbuf, cid->len, cid_string, sizeof(cid_string));
     Log("new connection %s", cid_string);
     return NULL;
 }
@@ -306,7 +327,7 @@ void server_on_closed_connection(lsquic_conn_t* conn)
 {
     const lsquic_cid_t* cid = lsquic_conn_id(conn);
     char cid_string[0x29];
-    extract_cid(cid_string, cid);
+    lsquic_hexstr(cid->idbuf, cid->len, cid_string, sizeof(cid_string));
     Log("Connection %s closed", cid_string);
 }
 
@@ -375,17 +396,4 @@ void process_ticker(Server* server)
 void reset_timer(EV_P_ ev_timer* timer, int revents)
 {
     process_ticker(timer->data);
-}
-
-// FIXME: (DEPRECATED) the function lsquic_hexstr already does this
-void extract_cid(char* cid_string, const lsquic_cid_t* cid)
-{
-    static const char byte2char[] = "0123456789ABCDEF";
-    uint_fast8_t i;
-
-    for (i = 0; i < cid->len; ++i) {
-        cid_string[i * 2 + 0] = byte2char[cid->idbuf[i] >> 4];
-        cid_string[i * 2 + 1] = byte2char[cid->idbuf[i] & 0xF];
-    }
-    cid_string[i << 1] = '\0';
 }
