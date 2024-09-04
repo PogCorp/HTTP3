@@ -1,12 +1,15 @@
 #include <ev.h>
-#include <lsquic.h>
 #include <sys/queue.h>
 #include <sys/socket.h>
 
+#include <lsquic.h>
 #include <lsquic_hash.h>
 
-#include "engine.h"
 #pragma once
+
+struct authority;
+
+TAILQ_HEAD(authority_list, authority);
 
 // TODO: write an interface type to comunicate with Go
 typedef struct server {
@@ -16,12 +19,19 @@ typedef struct server {
     struct ev_loop* event_loop;
     struct sockaddr_storage local_address;
     struct lsquic_stream_if stream_callbacks;
-    LsquicEngine engine;
+    struct lsquic_engine_settings settings;
+    lsquic_engine_t* quic_engine;
     char* keylog_path;
     char alpn[0x100];
     struct lsquic_hash* certificates;
+    struct authority_list authority_list;
     // interface QuicAdapter adapter_callbacks;
 } Server;
+
+struct authority {
+    TAILQ_ENTRY(authority);
+    struct ssl_ctx_st* ssl_ctx;
+};
 
 typedef struct {
     // total size of payload
@@ -42,8 +52,13 @@ typedef struct {
  * consumer must check errno to ensure that the configuration was appropriate
  * and server can listen
  * */
-void newServer(Server* server, const char* host_name, char* port,
-    const char* certkeym, const char* keyfile, const char* keylog);
+void newServer(Server* server, const char* keylog);
+
+/*
+ *
+ * */
+void add_authority(Server* server, const char* host_name, char* port,
+    const char* certkeym, const char* keyfile);
 
 /*
  * Callback to process the event of a new connection to the server
