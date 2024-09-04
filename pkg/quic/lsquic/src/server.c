@@ -6,11 +6,13 @@
 #include <ev.h>
 #include <openssl/ssl.h>
 #include <stdlib.h>
+#include <sys/queue.h>
 
 #include "address.c"
 #include "cert.h"
 #include "keylog.h"
 #include "lsquic.h"
+#include "lsquic_hash.h"
 #include "lsquic_int_types.h"
 #include "lsquic_util.h"
 #include "server.h"
@@ -95,20 +97,18 @@ void newServer(Server* server, const char* keylog)
         Log("engine could not be created");
         return;
     }
-    server->time_watcher.data = server;
-    server->socket_watcher.data = server;
-
-    // registering socket file descriptor for event read
-    ev_io_init(&server->socket_watcher, server_on_read, server->socket_descriptor,
-        EV_READ);
-    ev_io_start(server->event_loop, &server->socket_watcher);
-
-    ev_run(server->event_loop, 0);
 }
 
-void add_authority(Server* server, const char* host_name, char* port,
-    const char* certkeym, const char* keyfile)
+bool add_v_server(Server* server, const char* host_name, char* port,
+    const char* certkey, const char* keyfile)
 {
+    bool ok = load_certificate(server->certificates, host_name, certkey, keyfile, server->alpn, false);
+    if (!ok) {
+        Log("Failed to load certificate for %s", host_name);
+        return false;
+    }
+    struct v_server* v_server = calloc(1, sizeof(struct v_server));
+    return true;
 }
 
 /* connection methods */
@@ -396,4 +396,20 @@ void process_ticker(Server* server)
 void reset_timer(EV_P_ ev_timer* timer, int revents)
 {
     process_ticker(timer->data);
+}
+
+void prepare_server(Server* server)
+{
+    if (keylog_dir) {
+        struct lsquic_hash_elem* elem = lsquic_hash_first(server->certificates);
+        for (; elem; elem = lsquic_hash_next(server->certificates)) {
+            struct certificateElem* data = lsquic_hashelem_getdata(elem);
+            SSL_CTX_set_keylog_callback(data->ssl_ctx, keylog_log_line);
+        }
+    }
+    struct v_server* e = NULL;
+    TAILQ_FOREACH(e, server->v_servers, v_server)
+    {
+    }
+    // TODO: start v_servers
 }

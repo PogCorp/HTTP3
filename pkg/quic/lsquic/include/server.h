@@ -1,5 +1,6 @@
 #include "openssl/base.h"
 #include <ev.h>
+#include <stdbool.h>
 #include <sys/queue.h>
 #include <sys/socket.h>
 
@@ -8,30 +9,43 @@
 
 #pragma once
 
-struct authority;
+struct v_server;
 
-TAILQ_HEAD(authority_list, authority);
+TAILQ_HEAD(v_servers, v_server);
 
 // TODO: write an interface type to comunicate with Go
 typedef struct server {
-    int socket_descriptor;
     ev_io socket_watcher;
     ev_timer time_watcher;
     struct ev_loop* event_loop;
     struct sockaddr_storage local_address;
     struct lsquic_stream_if stream_callbacks;
     struct lsquic_engine_settings settings;
+    SSL_CTX* ssl_ctx;
     lsquic_engine_t* quic_engine;
     char* keylog_path;
     char alpn[0x100];
     struct lsquic_hash* certificates;
-    struct authority_list authority_list;
+    struct v_servers* v_servers;
     // interface QuicAdapter adapter_callbacks;
 } Server;
 
-struct authority {
-    TAILQ_ENTRY(authority);
-    struct ssl_ctx_st* ssl_ctx;
+struct v_server {
+    TAILQ_ENTRY(v_server)
+    v_server;
+    int socket_descriptor;
+    struct sockaddr_storage sas;
+    struct sockaddr_storage local_addr;
+};
+
+struct packet_buffer {
+    unsigned char* buffer_data;
+    unsigned char* cmsg_data;
+    struct iovec* iovecs;
+    struct sockaddr_storage *local_addr,
+        *peer_addr;
+    unsigned n_alloc;
+    unsigned buffer_size;
 };
 
 typedef struct {
@@ -58,8 +72,8 @@ void newServer(Server* server, const char* keylog);
 /*
  *
  * */
-void add_authority(Server* server, const char* host_name, char* port,
-    const char* certkeym, const char* keyfile);
+bool add_v_server(Server* server, const char* host_name, char* port,
+    const char* certkey, const char* keyfile);
 
 /*
  * Callback to process the event of a new connection to the server
