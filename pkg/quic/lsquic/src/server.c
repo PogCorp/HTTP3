@@ -7,16 +7,16 @@
 #include <stdlib.h>
 
 #include "address.c"
+#include "cert.h"
 #include "keylog.h"
 #include "lsquic.h"
 #include "server.h"
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 
-// TODO: piece extracted from tut.c, determine what this is
-enum ctl_what {
-    CW_SENDADDR = 1 << 0,
-    CW_ECN = 1 << 1,
+enum cmsg_flags {
+    SEND_ADDR = 1 << 0,
+    SEND_ECN = 1 << 1,
 };
 
 /* process ticker */
@@ -117,12 +117,20 @@ void serverListen(Server* server)
     ev_io_stop(server->event_loop, &server->socket_watcher);
     ev_timer_stop(server->event_loop, &server->time_watcher);
     ev_loop_destroy(server->event_loop);
-    lsquic_engine_destroy(server->engine.quic);
+    lsquic_engine_destroy(server->quic_engine);
     lsquic_global_cleanup();
     free(server->keylog_path);
 }
 
-static void setup_control_message(struct msghdr* msg, enum ctl_what cw,
+static void read_control_message()
+{
+}
+
+/*
+ * sets up a socket message with ancillary information, pertaining to protocol
+ * used and sets ecn value to help in congestion
+ * */
+static void format_control_message(struct msghdr* msg, enum cmsg_flags cw,
     const struct lsquic_out_spec* spec,
     unsigned char* buf, size_t bufsz)
 {
@@ -131,7 +139,7 @@ static void setup_control_message(struct msghdr* msg, enum ctl_what cw,
     struct sockaddr_in6* local_sa6;
     struct in_pktinfo info;
     struct in6_pktinfo info6;
-    size_t ctl_len;
+    size_t control_len;
 
     msg->msg_control = buf;
     msg->msg_controllen = bufsz;
@@ -141,9 +149,9 @@ static void setup_control_message(struct msghdr* msg, enum ctl_what cw,
      */
     memset(buf, 0, bufsz);
 
-    ctl_len = 0;
+    control_len = 0;
     for (cmsg = CMSG_FIRSTHDR(msg); cw && cmsg; cmsg = CMSG_NXTHDR(msg, cmsg)) {
-        if (cw & CW_SENDADDR) {
+        if (cw & SEND_ADDR) {
             if (AF_INET == spec->dest_sa->sa_family) {
                 local_sa = (struct sockaddr_in*)spec->local_sa;
                 memset(&info, 0, sizeof(info));
@@ -151,7 +159,7 @@ static void setup_control_message(struct msghdr* msg, enum ctl_what cw,
                 cmsg->cmsg_level = IPPROTO_IP;
                 cmsg->cmsg_type = IP_PKTINFO;
                 cmsg->cmsg_len = CMSG_LEN(sizeof(info));
-                ctl_len += CMSG_SPACE(sizeof(info));
+                control_len += CMSG_SPACE(sizeof(info));
                 memcpy(CMSG_DATA(cmsg), &info, sizeof(info));
             } else {
                 local_sa6 = (struct sockaddr_in6*)spec->local_sa;
@@ -161,31 +169,31 @@ static void setup_control_message(struct msghdr* msg, enum ctl_what cw,
                 cmsg->cmsg_type = IPV6_PKTINFO;
                 cmsg->cmsg_len = CMSG_LEN(sizeof(info6));
                 memcpy(CMSG_DATA(cmsg), &info6, sizeof(info6));
-                ctl_len += CMSG_SPACE(sizeof(info6));
+                control_len += CMSG_SPACE(sizeof(info6));
             }
-            cw &= ~CW_SENDADDR;
-        } else if (cw & CW_ECN) {
+            cw &= ~SEND_ADDR;
+        } else if (cw & SEND_ECN) {
             if (AF_INET == spec->dest_sa->sa_family) {
                 const int tos = spec->ecn;
                 cmsg->cmsg_level = IPPROTO_IP;
                 cmsg->cmsg_type = IP_TOS;
                 cmsg->cmsg_len = CMSG_LEN(sizeof(tos));
                 memcpy(CMSG_DATA(cmsg), &tos, sizeof(tos));
-                ctl_len += CMSG_SPACE(sizeof(tos));
+                control_len += CMSG_SPACE(sizeof(tos));
             } else {
                 const int tos = spec->ecn;
                 cmsg->cmsg_level = IPPROTO_IPV6;
                 cmsg->cmsg_type = IPV6_TCLASS;
                 cmsg->cmsg_len = CMSG_LEN(sizeof(tos));
                 memcpy(CMSG_DATA(cmsg), &tos, sizeof(tos));
-                ctl_len += CMSG_SPACE(sizeof(tos));
+                control_len += CMSG_SPACE(sizeof(tos));
             }
-            cw &= ~CW_ECN;
+            cw &= ~SEND_ECN;
         } else
             assert(0);
     }
 
-    msg->msg_controllen = ctl_len;
+    msg->msg_controllen = control_len;
 }
 
 static int server_packets_out(void* packets_out_ctx,
@@ -194,7 +202,7 @@ static int server_packets_out(void* packets_out_ctx,
 {
     int fd, socket_response = 0;
     struct msghdr message;
-    enum ctl_what cw;
+    enum cmsg_flags cw;
     union {
         // TODO: revise this tut.c union
         /* cmsg(3) recommends union for proper alignment */
@@ -217,11 +225,11 @@ static int server_packets_out(void* packets_out_ctx,
         message.msg_iov = specs[n].iov;
         message.msg_iovlen = specs[n].iovlen;
 
-        cw = CW_SENDADDR;
+        cw = SEND_ADDR;
         if (specs[n].ecn)
-            cw |= CW_ECN;
+            cw |= SEND_ECN;
         if (cw)
-            setup_control_message(&message, cw, &specs[n], ancillary.buf,
+            format_control_message(&message, cw, &specs[n], ancillary.buf,
                 sizeof(ancillary.buf));
         else {
             message.msg_control = NULL;
@@ -350,9 +358,9 @@ void process_ticker(Server* server)
     ev_tstamp timeout;
 
     ev_timer_stop(server->event_loop, &server->time_watcher);
-    lsquic_engine_process_conns(server->engine.quic);
+    lsquic_engine_process_conns(server->quic_engine);
 
-    if (lsquic_engine_earliest_adv_tick(server->engine.quic, &time_diff)) {
+    if (lsquic_engine_earliest_adv_tick(server->quic_engine, &time_diff)) {
         if (time_diff >= LSQUIC_DF_CLOCK_GRANULARITY)
             timeout = (ev_tstamp)time_diff / 1000000;
         else if (time_diff <= 0)
