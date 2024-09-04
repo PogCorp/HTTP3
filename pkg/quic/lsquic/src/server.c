@@ -1,20 +1,14 @@
 // NOTE: In order to access struct in6_pktinfo the define bellow is necessary
 #define _GNU_SOURCE
-#include <arpa/inet.h>
 #include <assert.h>
 #include <errno.h>
 #include <ev.h>
-#include <linux/limits.h>
-#include <netinet/in.h>
 #include <openssl/ssl.h>
-#include <stdint.h>
 #include <stdlib.h>
-#include <sys/types.h>
-#include <time.h>
 
 #include "address.c"
+#include "keylog.h"
 #include "lsquic.h"
-#include "lsquic_types.h"
 #include "server.h"
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
@@ -36,11 +30,6 @@ static int server_packets_out(void* packets_out_ctx,
     unsigned count);
 /* extract connection id into hex string */
 void extract_cid(char* cid_string, const lsquic_cid_t* cid);
-
-/* server keylogging */
-static void keylog_close(void* handle);
-static void* keylog_open(void* ctx, lsquic_conn_t* conn);
-static void keylog_log_line(void* handle, const char* line);
 
 static const struct lsquic_stream_if stream_interface = {
     .on_new_conn = server_on_new_connection,
@@ -80,7 +69,7 @@ void newServer(Server* server, const char* host_name, char* port,
     struct lsquic_engine_api engine_api;
     struct lsquic_engine_settings
         settings; // TODO: missing alpn and ecn values (might add congestion
-                  // algorithma as well)
+                  // algorithm as well)
     settings.es_ecn = LSQUIC_DF_ECN;
 
     memset(&engine_api, 0, sizeof(engine_api));
@@ -98,10 +87,8 @@ void newServer(Server* server, const char* host_name, char* port,
         return;
     }
 
-    // TODO: missing keylog configuration
-    const unsigned long keylog_len = strlen(keylog);
-    server->keylog_path = malloc(sizeof(char) * keylog_len);
-    memcpy(server->keylog_path, keylog, keylog_len);
+    const char* keylog_dir = getenv("KEYLOG_DIR");
+    setup_keylog_dir(keylog_dir);
 
     server->engine.quic = lsquic_engine_new(LSENG_SERVER, &engine_api);
     if (server->engine.quic == NULL) {
@@ -120,17 +107,6 @@ void newServer(Server* server, const char* host_name, char* port,
 
     ev_run(server->event_loop, 0);
 }
-
-/* keylogging */
-
-static void keylog_log_line(void* handle, const char* line)
-{
-    fputs(line, handle);
-    fputs("\n", handle);
-    fflush(handle);
-}
-
-static void keylog_close(void* handle) { fclose(handle); }
 
 /* connection methods */
 
