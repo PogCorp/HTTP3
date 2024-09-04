@@ -10,7 +10,7 @@ void Log(const char* fmt, ...)
 {
     if (log_stream) {
         va_list ap;
-        fprintf(log_stream, "LOG: ");
+        fprintf(log_stream, "[Server]: ");
         va_start(ap, fmt);
         (void)vfprintf(log_stream, fmt, ap);
         va_end(ap);

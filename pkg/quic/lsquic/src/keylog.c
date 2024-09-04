@@ -10,8 +10,6 @@
 
 /* keylogging */
 
-static const char* keylog_dir = NULL;
-
 void setup_keylog_dir(const char* dir)
 {
     keylog_dir = dir;
