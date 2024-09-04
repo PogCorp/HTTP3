@@ -50,19 +50,11 @@ static const struct lsquic_stream_if stream_interface = {
 //      resolve the ip
 
 // NOTE: There should be a wrapper func to GO here
-void newServer(Server* server, const char* host_name, char* port,
-    const char* certfile, const char* keyfile, const char* keylog)
+void newServer(Server* server, const char* keylog)
 {
     // initialize every field with default 0
     memset(server, 0, sizeof(Server));
-    // resolving address
-    SocketAddress address;
-    const int port_num = htons(atoi(port));
-    get_address_info(host_name, port_num, &address);
     server->event_loop = EV_DEFAULT;
-
-    /* certificates */
-    server->certificates = lsquic_hash_create();
 
     // registering callbacks and starting engine
     char errbuf[0x100];
@@ -79,8 +71,12 @@ void newServer(Server* server, const char* host_name, char* port,
     engine_api.ea_stream_if = &stream_interface;
     engine_api.ea_stream_if_ctx = server;
     engine_api.ea_settings = &settings;
-    engine_api.ea_lookup_cert; // TODO: use test_cert.c example of how to look at
-                               // certificates
+
+    /* certificates */
+    server->certificates = lsquic_hash_create();
+    engine_api.ea_lookup_cert = lookup_cert_callback;
+    engine_api.ea_cert_lu_ctx = &server->certificates;
+
     if (0 != lsquic_engine_check_settings(&settings, LSENG_SERVER, errbuf, sizeof(errbuf))) {
         errno = EINVAL;
         Log("invalid settings passed: %s", errbuf);
@@ -90,8 +86,8 @@ void newServer(Server* server, const char* host_name, char* port,
     const char* keylog_dir = getenv("KEYLOG_DIR");
     setup_keylog_dir(keylog_dir);
 
-    server->engine.quic = lsquic_engine_new(LSENG_SERVER, &engine_api);
-    if (server->engine.quic == NULL) {
+    server->quic_engine = lsquic_engine_new(LSENG_SERVER, &engine_api);
+    if (server->quic_engine == NULL) {
         // TODO: select a more appropriate errno value here
         errno = ENOPROTOOPT;
         Log("engine could not be created");
@@ -106,6 +102,11 @@ void newServer(Server* server, const char* host_name, char* port,
     ev_io_start(server->event_loop, &server->socket_watcher);
 
     ev_run(server->event_loop, 0);
+}
+
+void add_authority(Server* server, const char* host_name, char* port,
+    const char* certkeym, const char* keyfile)
+{
 }
 
 /* connection methods */
