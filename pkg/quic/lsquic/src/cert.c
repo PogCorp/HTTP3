@@ -6,9 +6,6 @@
 #include "cert.h"
 #include "logger.h"
 
-char* format_sni(const char* hostname, const char* certfile,
-    const char* keyfile);
-
 // TODO: add the alpn setter in the server.c
 
 // TODO: arg must be set to the server alpn context
@@ -63,10 +60,9 @@ bool load_certificate(struct lsquic_hash* certs, const char* hostname,
     struct certificateElem* cert = NULL;
     EVP_PKEY* pkey = NULL;
     FILE* f = NULL;
-    char* sni = format_sni(hostname, certfile, keyfile);
 
     cert = calloc(1, sizeof(*cert));
-    cert->sni = sni;
+    cert->sni = strdup(hostname);
     cert->ssl_ctx = SSL_CTX_new(TLS_method());
     if (!cert->ssl_ctx) {
         Log("at %s, SSL_CTX_new failed", __func__);
@@ -123,24 +119,4 @@ void clean_certificates(struct lsquic_hash* certs)
         free(cert);
     }
     lsquic_hash_destroy(certs);
-}
-
-// TODO: write tests
-char* format_sni(const char* hostname, const char* certfile,
-    const char* keyfile)
-{
-    const unsigned long hostname_len = strlen(hostname);
-    const unsigned long certfile_len = strlen(certfile);
-    const unsigned long keyfile_len = strlen(keyfile);
-    const unsigned long sni_len = hostname_len + certfile_len + keyfile_len + 3;
-
-    char* sni = malloc(sni_len * sizeof(char));
-    memcpy(sni, hostname, hostname_len);
-    *(sni + hostname_len) = '\0';
-    memcpy(sni + hostname_len + 1, certfile, certfile_len);
-    *(sni + hostname_len + certfile_len + 1) = '\0';
-    memcpy(sni + hostname_len + certfile_len + 2, keyfile, keyfile_len);
-    *(sni + hostname_len + certfile_len + 1) = '\0';
-
-    return sni;
 }
