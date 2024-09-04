@@ -10,14 +10,14 @@
 
 /* keylogging */
 
-static const char* keylog_dir = "./keylog";
+static const char* keylog_dir = NULL;
 
 void setup_keylog_dir(const char* dir)
 {
     keylog_dir = dir;
 }
 
-FILE* keylog_open_file(SSL* ssl_ctx)
+FILE* keylog_open_file(const SSL* ssl_ctx)
 {
     const lsquic_conn_t* conn;
     const lsquic_cid_t* cid;
@@ -40,9 +40,9 @@ FILE* keylog_open_file(SSL* ssl_ctx)
     return file;
 }
 
-void keylog_log_line(SSL* ssl_ctx, const char* line)
+void keylog_log_line(const SSL* ssl, const char* line)
 {
-    FILE* file = (FILE*)keylog_open_file(ssl_ctx);
+    FILE* file = (FILE*)keylog_open_file(ssl);
     if (file) {
         fputs(line, file);
         fputs("\n", file);
