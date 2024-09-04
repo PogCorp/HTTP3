@@ -11,6 +11,8 @@ struct certificateElem {
     struct lsquic_hash_elem hash_el;
 };
 
+SSL_CTX* get_ssl_ctx(void* peer_ctx, const struct sockaddr* _);
+
 int select_alpn_callback(SSL* ssl, const unsigned char** out,
     unsigned char* outlen, const unsigned char* in,
     unsigned int inlen, void* arg);
