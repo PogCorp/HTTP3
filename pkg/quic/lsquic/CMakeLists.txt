@@ -24,7 +24,7 @@ IF(BUILD_LSQUIC)
     INCLUDE_DIRECTORIES(lsquic/src/liblsquic)
     ADD_SUBDIRECTORY(lsquic/src/liblsquic)
     INCLUDE_DIRECTORIES(include)
-    ADD_LIBRARY(lsquic_adapter STATIC ./src/logger.c ./src/cert.c ./src/server.c)
+    ADD_LIBRARY(lsquic_adapter STATIC ./src/logger.c ./src/cert.c ./src/server.c ./src/keylog.c)
 ENDIF()
 
 MESSAGE(STATUS "Compiler flags: ${CMAKE_C_FLAGS}")
