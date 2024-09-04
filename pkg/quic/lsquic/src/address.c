@@ -10,6 +10,7 @@ typedef union socketAddress {
     struct sockaddr_in6 addr6;
 } SocketAddress;
 
+// TODO: resolve for DNS as well
 static void get_address_info(const char* host_name, int port_num, SocketAddress* address)
 {
     if (inet_pton(AF_INET, host_name, &address->addr4.sin_addr)) {
