@@ -1,5 +1,6 @@
 // NOTE: In order to access struct in6_pktinfo the define bellow is necessary
 #define _GNU_SOURCE
+
 #include "openssl/base.h"
 #include <assert.h>
 #include <errno.h>
@@ -9,6 +10,7 @@
 #include <sys/queue.h>
 
 #include "address.c"
+#include "ancillary.h"
 #include "cert.h"
 #include "keylog.h"
 #include "lsquic.h"
@@ -18,23 +20,27 @@
 #include "server.h"
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
-
-enum cmsg_flags {
-    SEND_ADDR = 1 << 0,
-    SEND_ECN = 1 << 1,
-};
+#define MAX_OUT_BATCH_SIZE 1024
+#define MAX_OUT_BATCH_SIZE 1024 // DOCS: max size of lsquic out packets. Defined in  https://lsquic.readthedocs.io/en/latest/internals.html#out-batch
+#define MAX_PACKET_SIZE 65535
+#define NDROPPED_SIZE CMSG_SPACE(sizeof(uint32_t)) // get a platform independent size of ancillary field for dropped packets
+#define ECN_SIZE CMSG_SPACE(sizeof(int)) // get a platform independent size of ancillary field for ECN value
+#define IPV4_DST_MSG_SIZE sizeof(struct sockaddr_in) // size of ipv4 field contained in ancillary packets
+#define IPV6_DST_MSG_SIZE sizeof(struct sockaddr_in) // size of ipv6 field contained in ancillary packets
+// total size for ancillary. (just the sum of the previous)
+#define CMSG_SIZE (CMSG_SPACE(MAX(IPV4_DST_MSG_SIZE, IPV6_DST_MSG_SIZE) + NDROPPED_SIZE + ECN_SIZE))
 
 /* process ticker */
 void reset_timer(EV_P_ ev_timer* timer, int revents);
 /* ssl configuration */
 static SSL_CTX* server_get_ssl_ctx(void* peer_ctx,
     const struct sockaddr* address);
-/* connection methods */
-static int server_packets_out(void* packets_out_ctx,
-    const struct lsquic_out_spec* specs,
-    unsigned count);
 /* add alpn value */
 static void add_alpn(char* alpn, char* proto);
+/* send failure */
+void handle_send_failure(Server* server, int fd);
+void schedule_resend(EV_P_ ev_io* ev_write, int revents);
+/* setup file descriptor */
 
 static const struct lsquic_stream_if stream_interface = {
     .on_new_conn = server_on_new_connection,
@@ -45,10 +51,6 @@ static const struct lsquic_stream_if stream_interface = {
     .on_close = server_on_close,
 };
 
-// TODO: write a helper function to format sni from hostname, port, certkey,
-// keyfile
-//
-//
 // TODO: certify that the get_address_info function works correctly since it
 // expects ip
 //      address instead of a https scheme, therefore there might be a need to
@@ -99,7 +101,8 @@ void newServer(Server* server, const char* keylog)
     }
 }
 
-bool add_v_server(Server* server, const char* host_name, char* port,
+// TODO: validate address and set address
+bool add_v_server(Server* server, const char* uri,
     const char* certkey, const char* keyfile)
 {
     bool ok = load_certificate(server->certificates, host_name, certkey, keyfile, server->alpn, false);
@@ -108,6 +111,9 @@ bool add_v_server(Server* server, const char* host_name, char* port,
         return false;
     }
     struct v_server* v_server = calloc(1, sizeof(struct v_server));
+    v_server->socket_watcher.data = v_server;
+    ev_io_init(&v_server->socket_watcher, read_socket, v_server->socket_descriptor, EV_WRITE | EV_READ);
+    ev_io_start(server->event_loop, &v_server->socket_watcher);
     return true;
 }
 
@@ -116,7 +122,6 @@ bool add_v_server(Server* server, const char* host_name, char* port,
 void serverListen(Server* server)
 {
     ev_run(server->event_loop, 0);
-    ev_io_stop(server->event_loop, &server->socket_watcher);
     ev_timer_stop(server->event_loop, &server->time_watcher);
     ev_loop_destroy(server->event_loop);
     lsquic_engine_destroy(server->quic_engine);
@@ -124,137 +129,75 @@ void serverListen(Server* server)
     free(server->keylog_path);
 }
 
-static void read_control_message()
-{
-}
-
-/*
- * sets up a socket message with ancillary information, pertaining to protocol
- * used and sets ecn value to help in congestion
- * */
-static void format_control_message(struct msghdr* msg, enum cmsg_flags cw,
-    const struct lsquic_out_spec* spec,
-    unsigned char* buf, size_t bufsz)
-{
-    struct cmsghdr* cmsg;
-    struct sockaddr_in* local_sa;
-    struct sockaddr_in6* local_sa6;
-    struct in_pktinfo info;
-    struct in6_pktinfo info6;
-    size_t control_len;
-
-    msg->msg_control = buf;
-    msg->msg_controllen = bufsz;
-
-    /* Need to zero the buffer due to a bug(?) in CMSG_NXTHDR.  See
-     * https://stackoverflow.com/questions/27601849/cmsg-nxthdr-returns-null-even-though-there-are-more-cmsghdr-objects
-     */
-    memset(buf, 0, bufsz);
-
-    control_len = 0;
-    for (cmsg = CMSG_FIRSTHDR(msg); cw && cmsg; cmsg = CMSG_NXTHDR(msg, cmsg)) {
-        if (cw & SEND_ADDR) {
-            if (AF_INET == spec->dest_sa->sa_family) {
-                local_sa = (struct sockaddr_in*)spec->local_sa;
-                memset(&info, 0, sizeof(info));
-                info.ipi_spec_dst = local_sa->sin_addr;
-                cmsg->cmsg_level = IPPROTO_IP;
-                cmsg->cmsg_type = IP_PKTINFO;
-                cmsg->cmsg_len = CMSG_LEN(sizeof(info));
-                control_len += CMSG_SPACE(sizeof(info));
-                memcpy(CMSG_DATA(cmsg), &info, sizeof(info));
-            } else {
-                local_sa6 = (struct sockaddr_in6*)spec->local_sa;
-                memset(&info6, 0, sizeof(info6));
-                info6.ipi6_addr = local_sa6->sin6_addr;
-                cmsg->cmsg_level = IPPROTO_IPV6;
-                cmsg->cmsg_type = IPV6_PKTINFO;
-                cmsg->cmsg_len = CMSG_LEN(sizeof(info6));
-                memcpy(CMSG_DATA(cmsg), &info6, sizeof(info6));
-                control_len += CMSG_SPACE(sizeof(info6));
-            }
-            cw &= ~SEND_ADDR;
-        } else if (cw & SEND_ECN) {
-            if (AF_INET == spec->dest_sa->sa_family) {
-                const int tos = spec->ecn;
-                cmsg->cmsg_level = IPPROTO_IP;
-                cmsg->cmsg_type = IP_TOS;
-                cmsg->cmsg_len = CMSG_LEN(sizeof(tos));
-                memcpy(CMSG_DATA(cmsg), &tos, sizeof(tos));
-                control_len += CMSG_SPACE(sizeof(tos));
-            } else {
-                const int tos = spec->ecn;
-                cmsg->cmsg_level = IPPROTO_IPV6;
-                cmsg->cmsg_type = IPV6_TCLASS;
-                cmsg->cmsg_len = CMSG_LEN(sizeof(tos));
-                memcpy(CMSG_DATA(cmsg), &tos, sizeof(tos));
-                control_len += CMSG_SPACE(sizeof(tos));
-            }
-            cw &= ~SEND_ECN;
-        } else
-            assert(0);
-    }
-
-    msg->msg_controllen = control_len;
-}
-
 static int server_packets_out(void* packets_out_ctx,
     const struct lsquic_out_spec* specs,
     unsigned count)
 {
-    int fd, socket_response = 0;
-    struct msghdr message;
-    enum cmsg_flags cw;
+    struct v_server* v_server = packets_out_ctx;
+    int fd, response = 0;
+    struct mmsghdr messages[MAX_OUT_BATCH_SIZE];
+    enum cmsg_opts opts;
     union {
         /* cmsg(3) recommends union for proper alignment */
         unsigned char buf[CMSG_SPACE(MAX(sizeof(struct in_pktinfo),
                               sizeof(struct in6_pktinfo)))
             + CMSG_SPACE(sizeof(int))];
         struct cmsghdr cmsg;
-    } ancillary;
+    } ancillary[MAX_OUT_BATCH_SIZE];
 
     if (0 == count)
         return 0;
 
-    message.msg_flags = 0;
-    unsigned n = 0;
-    do {
+    for (int i = 0; i < count && i < MAX_OUT_BATCH_SIZE; i++) {
+        messages[i].msg_hdr.msg_flags = 0;
+        unsigned n = 0;
         fd = (int)(uint64_t)specs[n].peer_ctx;
-        message.msg_name = (void*)specs[n].dest_sa;
-        message.msg_namelen = (AF_INET == specs[n].dest_sa->sa_family ? sizeof(struct sockaddr_in)
-                                                                      : sizeof(struct sockaddr_in6)),
-        message.msg_iov = specs[n].iov;
-        message.msg_iovlen = specs[n].iovlen;
+        messages[i].msg_hdr.msg_name = (void*)specs[n].dest_sa;
+        messages[i].msg_hdr.msg_namelen = (AF_INET == specs[n].dest_sa->sa_family
+                ? sizeof(struct sockaddr_in)
+                : sizeof(struct sockaddr_in6)),
+        messages[i].msg_hdr.msg_iov = specs[n].iov;
+        messages[i].msg_hdr.msg_iovlen = specs[n].iovlen;
 
-        cw = SEND_ADDR;
+        opts = SEND_ADDR;
         if (specs[n].ecn)
-            cw |= SEND_ECN;
-        if (cw)
-            format_control_message(&message, cw, &specs[n], ancillary.buf,
-                sizeof(ancillary.buf));
+            opts |= SEND_ECN;
+        if (opts)
+            format_control_message(&messages[i].msg_hdr, opts, &specs[n], ancillary[i].buf,
+                sizeof(ancillary[i].buf));
         else {
-            message.msg_control = NULL;
-            message.msg_controllen = 0;
+            messages[i].msg_hdr.msg_control = NULL;
+            messages[i].msg_hdr.msg_controllen = 0;
         }
-
-        socket_response = sendmsg(fd, &message, 0);
-        if (socket_response < 0) {
-            Log("sendmsg failed: %s", strerror(errno));
-            break;
-        }
-        ++n;
-    } while (n < count);
-
-    // TODO: not ideal way to handle this
-    if (n < count)
-        Log("could not send all of them");
-
-    if (n > 0)
-        return n;
-    else {
-        assert(socket_response < 0);
-        return -1;
     }
+
+    response = sendmmsg(fd, messages, count, 0);
+    if (response < (int)count) {
+        handle_send_failure(v_server->server, fd);
+        if (response < 0) {
+            Log("sendmsg failed: %s", strerror(errno));
+        } else if (response > 0) {
+            errno = EAGAIN;
+        }
+    }
+    return response;
+}
+
+void handle_send_failure(Server* server, int fd)
+{
+    ev_io* ev_schedular = calloc(1, sizeof(ev_io));
+    ev_schedular->data = server->quic_engine;
+    ev_io_init(ev_schedular, schedule_resend, fd, EV_WRITE);
+    ev_io_start(server->event_loop, ev_schedular);
+}
+
+void schedule_resend(EV_P_ ev_io* ev_write, int revents)
+{
+    Server* server = ev_write->data;
+    lsquic_engine_t* engine = server->quic_engine;
+    ev_io_stop(server->event_loop, ev_write);
+    free(ev_write);
+    lsquic_engine_send_unsent_packets(engine);
 }
 
 /* ssl methods */

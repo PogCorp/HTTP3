@@ -9,13 +9,24 @@
 
 #pragma once
 
+enum ReadStatus {
+    OK,
+    NO_ROOM,
+    ERROR,
+};
+
+enum IpVersion {
+    IPV4,
+    IPV6
+};
+
 struct v_server;
+struct packet_buffer;
 
 TAILQ_HEAD(v_servers, v_server);
 
 // TODO: write an interface type to comunicate with Go
 typedef struct server {
-    ev_io socket_watcher;
     ev_timer time_watcher;
     struct ev_loop* event_loop;
     struct sockaddr_storage local_address;
@@ -36,6 +47,11 @@ struct v_server {
     int socket_descriptor;
     struct sockaddr_storage sas;
     struct sockaddr_storage local_addr;
+    char* sni;
+    Server* server;
+    enum IpVersion ip_ver;
+    struct packet_buffer* buffer;
+    ev_io socket_watcher;
 };
 
 struct packet_buffer {
@@ -59,8 +75,6 @@ typedef struct {
 
 /* TODO: add Cgo callbacks */
 
-/* LSQUIC Callbacks */
-
 /*
  * Creates a new server for the provided parameters
  *
@@ -72,8 +86,17 @@ void newServer(Server* server, const char* keylog);
 /*
  *
  * */
-bool add_v_server(Server* server, const char* host_name, char* port,
+bool add_v_server(Server* server, const char* uri,
     const char* certkey, const char* keyfile);
+
+void read_socket(EV_P_ ev_io* w, int revents);
+
+/* connection methods */
+static int server_packets_out(void* packets_out_ctx,
+    const struct lsquic_out_spec* specs,
+    unsigned count);
+
+/* LSQUIC Callbacks */
 
 /*
  * Callback to process the event of a new connection to the server
