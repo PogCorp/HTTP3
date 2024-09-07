@@ -5,9 +5,11 @@
 #include <assert.h>
 #include <errno.h>
 #include <ev.h>
+#include <fcntl.h>
 #include <openssl/ssl.h>
 #include <stdlib.h>
 #include <sys/queue.h>
+#include <unistd.h>
 
 #include "address.c"
 #include "ancillary.h"
@@ -18,17 +20,6 @@
 #include "lsquic_int_types.h"
 #include "lsquic_util.h"
 #include "server.h"
-
-#define MAX(a, b) ((a) > (b) ? (a) : (b))
-#define MAX_OUT_BATCH_SIZE 1024
-#define MAX_OUT_BATCH_SIZE 1024 // DOCS: max size of lsquic out packets. Defined in  https://lsquic.readthedocs.io/en/latest/internals.html#out-batch
-#define MAX_PACKET_SIZE 65535
-#define NDROPPED_SIZE CMSG_SPACE(sizeof(uint32_t)) // get a platform independent size of ancillary field for dropped packets
-#define ECN_SIZE CMSG_SPACE(sizeof(int)) // get a platform independent size of ancillary field for ECN value
-#define IPV4_DST_MSG_SIZE sizeof(struct sockaddr_in) // size of ipv4 field contained in ancillary packets
-#define IPV6_DST_MSG_SIZE sizeof(struct sockaddr_in) // size of ipv6 field contained in ancillary packets
-// total size for ancillary. (just the sum of the previous)
-#define CMSG_SIZE (CMSG_SPACE(MAX(IPV4_DST_MSG_SIZE, IPV6_DST_MSG_SIZE) + NDROPPED_SIZE + ECN_SIZE))
 
 /* process ticker */
 void reset_timer(EV_P_ ev_timer* timer, int revents);
@@ -50,11 +41,6 @@ static const struct lsquic_stream_if stream_interface = {
     .on_write = server_on_write,
     .on_close = server_on_close,
 };
-
-// TODO: certify that the get_address_info function works correctly since it
-// expects ip
-//      address instead of a https scheme, therefore there might be a need to
-//      resolve the ip
 
 // NOTE: There should be a wrapper func to GO here
 void newServer(Server* server, const char* keylog)
@@ -101,19 +87,252 @@ void newServer(Server* server, const char* keylog)
     }
 }
 
-// TODO: validate address and set address
 bool add_v_server(Server* server, const char* uri,
     const char* certkey, const char* keyfile)
 {
-    bool ok = load_certificate(server->certificates, host_name, certkey, keyfile, server->alpn, false);
+    char* address = strdup(uri);
+    char *host, *port;
+
+    bool ok = validate_uri(address, &host, &port);
     if (!ok) {
-        Log("Failed to load certificate for %s", host_name);
+        Log("Failed to validate uri: %s", uri);
+        free(address);
         return false;
     }
+
+    ok = load_certificate(server->certificates, host, certkey, keyfile, server->alpn, false);
+    if (!ok) {
+        Log("Failed to load certificate for %s", host);
+        free(address);
+        return false;
+    }
+
     struct v_server* v_server = calloc(1, sizeof(struct v_server));
+    v_server_set_address_info(v_server, host, port);
+    ok = v_server_configure_socket(v_server);
+    if (!ok) {
+        Log("failed to configure socket for %s", uri);
+        free(v_server);
+        return false;
+    }
+    v_server->buffer = new_packet_buffer(v_server->socket_descriptor);
     v_server->socket_watcher.data = v_server;
-    ev_io_init(&v_server->socket_watcher, read_socket, v_server->socket_descriptor, EV_WRITE | EV_READ);
+    v_server->server = server;
+    TAILQ_INSERT_TAIL(server->v_servers, v_server, v_server);
+    ev_io_init(&v_server->socket_watcher, server_read_socket, v_server->socket_descriptor, EV_WRITE | EV_READ);
     ev_io_start(server->event_loop, &v_server->socket_watcher);
+
+    free(address);
+    return true;
+}
+
+struct packet_buffer* new_packet_buffer(int fd)
+{
+    struct packet_buffer* packet_buf;
+    unsigned num_packets;
+    socklen_t opt_len;
+    int receive_size;
+
+    opt_len = sizeof(receive_size);
+    if (0 != getsockopt(fd, SOL_SOCKET, SO_RCVBUF, (void*)&receive_size, &opt_len)) {
+        Log("getsockopt failed: %s", strerror(errno));
+        return NULL;
+    }
+
+    num_packets = (unsigned)receive_size / 1370;
+    Log("packet buffer size: %d bytes; packet amount set to %u",
+        receive_size, num_packets);
+    receive_size += MAX_PACKET_SIZE;
+
+    packet_buf = calloc(1, sizeof(*packet_buf));
+    packet_buf->buffer_data = malloc(receive_size);
+    packet_buf->cmsg_data = malloc(num_packets * CMSG_SIZE);
+    packet_buf->vecs = malloc(num_packets * sizeof(packet_buf->vecs[0]));
+    packet_buf->local_addresses = malloc(num_packets * sizeof(packet_buf->local_addresses[0]));
+    packet_buf->peer_addresses = malloc(num_packets * sizeof(packet_buf->peer_addresses[0]));
+    packet_buf->buffer_size = receive_size;
+    packet_buf->packet_amount = num_packets;
+    packet_buf->ecn = malloc(num_packets * sizeof(packet_buf->ecn[0]));
+
+    for (int n = 0; n < num_packets; ++n) {
+        packet_buf->vecs[n].iov_base = packet_buf->buffer_data + MAX_PACKET_SIZE * n;
+        packet_buf->vecs[n].iov_len = MAX_PACKET_SIZE;
+        packet_buf->packets[n] = (struct msghdr) {
+            .msg_name = &packet_buf->peer_addresses[n],
+            .msg_namelen = sizeof(packet_buf->peer_addresses[n]),
+            .msg_iov = &packet_buf->vecs[n],
+            .msg_iovlen = 1,
+            .msg_control = packet_buf->cmsg_data + CMSG_SIZE * n,
+            .msg_controllen = CMSG_SIZE,
+        };
+    }
+
+    return packet_buf;
+}
+
+// open and configure the socket
+bool v_server_configure_socket(struct v_server* v_server)
+{
+    int sockfd, saved_errno, s;
+    int flags;
+    int on = 1;
+    socklen_t socklen;
+    char addr_str[0x20];
+    int sendbuf_val, rcvbuf_val;
+    char* rcvbuf = getenv("RECVBUF_SIZE");
+    char* sendbuf = getenv("SENDBUF_SIZE");
+    const struct sockaddr* sa_local = (struct sockaddr*)&v_server->sas;
+
+    switch (sa_local->sa_family) {
+    case AF_INET:
+        socklen = sizeof(struct sockaddr_in);
+        break;
+    case AF_INET6:
+        socklen = sizeof(struct sockaddr_in6);
+        break;
+    default:
+        errno = EINVAL;
+        return -1;
+    }
+
+    sockfd = socket(sa_local->sa_family, SOCK_DGRAM, 0);
+    if (-1 == sockfd)
+        return false;
+
+    if (AF_INET6 == sa_local->sa_family
+        && setsockopt(sockfd, IPPROTO_IPV6, IPV6_V6ONLY,
+               &on, sizeof(on))
+            == -1) {
+        close(sockfd);
+        return false;
+    }
+
+    if (0 != bind(sockfd, sa_local, socklen)) {
+        saved_errno = errno;
+        Log("bind failed: %s", strerror(errno));
+        close(sockfd);
+        errno = saved_errno;
+        return false;
+    }
+
+    /* Make socket non-blocking */
+    flags = fcntl(sockfd, F_GETFL);
+    if (-1 == flags) {
+        saved_errno = errno;
+        close(sockfd);
+        errno = saved_errno;
+        return false;
+    }
+    flags |= O_NONBLOCK;
+    if (0 != fcntl(sockfd, F_SETFL, flags)) {
+        saved_errno = errno;
+        close(sockfd);
+        errno = saved_errno;
+        return false;
+    }
+
+    on = 1;
+    if (AF_INET == sa_local->sa_family)
+        s = setsockopt(sockfd, IPPROTO_IP, IP_RECVORIGDSTADDR, &on, sizeof(on));
+    else {
+        s = setsockopt(sockfd, IPPROTO_IPV6, IPV6_RECVPKTINFO, &on, sizeof(on));
+    }
+
+    if (0 != s) {
+        saved_errno = errno;
+        close(sockfd);
+        errno = saved_errno;
+        return false;
+    }
+
+    on = 1;
+    s = setsockopt(sockfd, SOL_SOCKET, SO_RXQ_OVFL, &on, sizeof(on));
+    if (0 != s) {
+        saved_errno = errno;
+        close(sockfd);
+        errno = saved_errno;
+        return false;
+    }
+
+    if (AF_INET == sa_local->sa_family) {
+        on = IP_PMTUDISC_PROBE;
+        s = setsockopt(sockfd, IPPROTO_IP, IP_MTU_DISCOVER, &on,
+            sizeof(on));
+        if (0 != s) {
+            saved_errno = errno;
+            close(sockfd);
+            errno = saved_errno;
+            return false;
+        }
+    } else if (AF_INET6 == sa_local->sa_family) {
+        int on = IP_PMTUDISC_PROBE;
+        s = setsockopt(sockfd, IPPROTO_IPV6, IPV6_MTU_DISCOVER, &on, sizeof(on));
+    }
+
+    on = 1;
+    if (AF_INET == sa_local->sa_family) {
+        s = setsockopt(sockfd, IPPROTO_IP, IP_RECVTOS,
+            &on, sizeof(on));
+        if (!s)
+            s = setsockopt(sockfd, IPPROTO_IP, IP_TOS,
+                &on, sizeof(on));
+    } else {
+        s = setsockopt(sockfd, IPPROTO_IPV6, IPV6_RECVTCLASS,
+            &on, sizeof(on));
+        if (!s)
+            s = setsockopt(sockfd, IPPROTO_IPV6, IPV6_TCLASS,
+                &on, sizeof(on));
+    }
+    if (0 != s) {
+        saved_errno = errno;
+        close(sockfd);
+        errno = saved_errno;
+        return -1;
+    }
+    Log("server ECN support is enabled.");
+
+    if (sendbuf != NULL && (sendbuf_val = atoi(sendbuf))) {
+        s = setsockopt(sockfd, SOL_SOCKET, SO_SNDBUF, &sendbuf_val,
+            sizeof(sendbuf_val));
+        if (0 != s) {
+            saved_errno = errno;
+            close(sockfd);
+            errno = saved_errno;
+            return -1;
+        }
+    }
+
+    if (rcvbuf != NULL && (rcvbuf_val = atoi(rcvbuf))) {
+        s = setsockopt(sockfd, SOL_SOCKET, SO_RCVBUF, &rcvbuf_val,
+            sizeof(rcvbuf_val));
+        if (0 != s) {
+            saved_errno = errno;
+            close(sockfd);
+            errno = saved_errno;
+            return -1;
+        }
+    }
+
+    if (0 != getsockname(sockfd, (struct sockaddr*)sa_local, &socklen)) {
+        saved_errno = errno;
+        close(sockfd);
+        errno = saved_errno;
+        return -1;
+    }
+
+    memcpy((void*)&v_server->local_address, sa_local,
+        sa_local->sa_family == AF_INET ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6));
+    switch (sa_local->sa_family) {
+    case AF_INET:
+        Log("local address: %s:%d",
+            inet_ntop(AF_INET, &((struct sockaddr_in*)sa_local)->sin_addr,
+                addr_str, sizeof(addr_str)),
+            ntohs(((struct sockaddr_in*)sa_local)->sin_port));
+        break;
+    }
+
+    v_server->socket_descriptor = sockfd;
+
     return true;
 }
 
