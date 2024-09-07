@@ -9,6 +9,17 @@
 
 #pragma once
 
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
+#define MAX_OUT_BATCH_SIZE 1024
+#define MAX_OUT_BATCH_SIZE 1024 // DOCS: max size of lsquic out packets. Defined in  https://lsquic.readthedocs.io/en/latest/internals.html#out-batch
+#define MAX_PACKET_SIZE 65535
+#define NDROPPED_SIZE CMSG_SPACE(sizeof(uint32_t)) // get a platform independent size of ancillary field for dropped packets
+#define ECN_SIZE CMSG_SPACE(sizeof(int)) // get a platform independent size of ancillary field for ECN value
+#define IPV4_DST_MSG_SIZE sizeof(struct sockaddr_in) // size of ipv4 field contained in ancillary packets
+#define IPV6_DST_MSG_SIZE sizeof(struct sockaddr_in) // size of ipv6 field contained in ancillary packets
+// total size for ancillary. (just the sum of the previous)
+#define CMSG_SIZE (CMSG_SPACE(MAX(IPV4_DST_MSG_SIZE, IPV6_DST_MSG_SIZE) + NDROPPED_SIZE + ECN_SIZE))
+
 enum ReadStatus {
     OK,
     NO_ROOM,
@@ -46,8 +57,7 @@ struct v_server {
     v_server;
     int socket_descriptor;
     struct sockaddr_storage sas;
-    struct sockaddr_storage local_addr;
-    char* sni;
+    struct sockaddr_storage local_address;
     Server* server;
     enum IpVersion ip_ver;
     struct packet_buffer* buffer;
@@ -57,10 +67,12 @@ struct v_server {
 struct packet_buffer {
     unsigned char* buffer_data;
     unsigned char* cmsg_data;
-    struct iovec* iovecs;
-    struct sockaddr_storage *local_addr,
-        *peer_addr;
-    unsigned n_alloc;
+    struct msghdr* packets;
+    struct sockaddr_storage* local_addresses;
+    struct sockaddr_storage* peer_addresses;
+    struct iovec* vecs;
+    int* ecn;
+    unsigned packet_amount;
     unsigned buffer_size;
 };
 
@@ -89,7 +101,11 @@ void newServer(Server* server, const char* keylog);
 bool add_v_server(Server* server, const char* uri,
     const char* certkey, const char* keyfile);
 
-void read_socket(EV_P_ ev_io* w, int revents);
+struct packet_buffer* new_packet_buffer(int fd);
+
+bool v_server_configure_socket(struct v_server* v_server);
+
+void server_read_socket(EV_P_ ev_io* w, int revents);
 
 /* connection methods */
 static int server_packets_out(void* packets_out_ctx,
