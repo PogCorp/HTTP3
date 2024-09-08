@@ -232,7 +232,7 @@ struct packet_buffer* new_packet_buffer(int fd)
     for (int n = 0; n < num_packets; ++n) {
         packet_buf->vecs[n].iov_base = packet_buf->buffer_data + MAX_PACKET_SIZE * n;
         packet_buf->vecs[n].iov_len = MAX_PACKET_SIZE;
-        packet_buf->packets[n] = (struct msghdr) {
+        packet_buf->packets[n].msg_hdr = (struct msghdr) {
             .msg_name = &packet_buf->peer_addresses[n],
             .msg_namelen = sizeof(packet_buf->peer_addresses[n]),
             .msg_iov = &packet_buf->vecs[n],
@@ -243,6 +243,17 @@ struct packet_buffer* new_packet_buffer(int fd)
     }
 
     return packet_buf;
+}
+
+void packet_buffer_cleanup(struct packet_buffer* buffer)
+{
+    free(buffer->vecs);
+    free(buffer->local_addresses);
+    free(buffer->peer_addresses);
+    free(buffer->ecn);
+    free(buffer->cmsg_data);
+    free(buffer->buffer_data);
+    free(buffer);
 }
 
 // open and configure the socket
@@ -413,17 +424,8 @@ bool v_server_configure_socket(struct v_server* v_server)
 
 /* connection methods */
 
-void serverListen(Server* server)
-{
-    ev_run(server->event_loop, 0);
-    ev_timer_stop(server->event_loop, &server->time_watcher);
-    ev_loop_destroy(server->event_loop);
-    lsquic_engine_destroy(server->quic_engine);
-    lsquic_global_cleanup();
-    free(server->keylog_path);
-}
-
-static int server_packets_out(void* packets_out_ctx,
+static int server_write_socket(
+    void* packets_out_ctx,
     const struct lsquic_out_spec* specs,
     unsigned count)
 {
@@ -477,6 +479,67 @@ static int server_packets_out(void* packets_out_ctx,
     return response;
 }
 
+// TODO:  whenever the amount of packets read coincides with the value of packets_amount,
+//       this function will be called again for no reason, therefore look for a more
+//       logical way to identify that there are still packets that could no be read
+enum ReadStatus receive_packets(struct v_server* v_server, unsigned int* packets_read)
+{
+    struct packet_buffer* buffer = v_server->buffer;
+    struct sockaddr_storage* local_address;
+    uint32_t dropped_packets;
+    int response;
+    unsigned int i;
+
+    response = recvmmsg(v_server->socket_descriptor, buffer->packets, buffer->packet_amount, 0, NULL);
+    if (response < 0) {
+        if (!(EAGAIN == errno || EWOULDBLOCK == errno))
+            Log("error in recvmmsg, got err: %s", strerror(errno));
+        return ERROR;
+    }
+
+    for (i = 0; i < buffer->packet_amount; i++) {
+        local_address = &buffer->local_addresses[i];
+        memcpy(local_address, &v_server->local_address, sizeof(*local_address));
+        dropped_packets = 0;
+        buffer->ecn[i] = 0;
+        read_control_message(&buffer->packets[i].msg_hdr, local_address, &dropped_packets, &buffer->ecn[i]);
+        v_server->dropped_packets = dropped_packets;
+        buffer->vecs[i].iov_len = buffer->packets->msg_len;
+    }
+    *packets_read = i;
+    return i == buffer->packet_amount ? NO_ROOM : OK;
+}
+
+void server_read_socket(EV_P_ ev_io* w, int revents)
+{
+    enum ReadStatus status;
+    unsigned int i, read_packets, batches;
+    struct v_server* v_server = w->data;
+    struct packet_buffer* buffer = v_server->buffer;
+    lsquic_engine_t* engine = v_server->server->quic_engine;
+
+    do {
+        receive_packets(v_server, &read_packets);
+        batches += read_packets > 0;
+        for (i = 0; i < read_packets; i++) {
+            if (0 > lsquic_engine_packet_in(
+                    engine,
+                    buffer->vecs[i].iov_base,
+                    buffer->vecs[i].iov_len,
+                    (struct sockaddr*)&buffer->local_addresses[i],
+                    (struct sockaddr*)&buffer->peer_addresses[i],
+                    v_server->server->ssl_ctx,
+                    buffer->ecn[i])) {
+                Log("ERROR! lsquic_engine_in did not process packets");
+                break;
+            }
+        }
+        if (i > 0) {
+            process_ticker(v_server->server);
+        }
+    } while (status == NO_ROOM);
+}
+
 void handle_send_failure(Server* server, int fd)
 {
     ev_io* ev_schedular = calloc(1, sizeof(ev_io));
@@ -524,33 +587,10 @@ bool set_ssl_ctx(Server* server, const char* keylog_dir)
     return 0;
 }
 
-SSL_CTX* extract_ssl_certificate(const char* certificate, const char* keyfile)
-{
-    SSL_CTX* s_ssl_ctx = SSL_CTX_new(TLS_method());
-    if (!s_ssl_ctx) {
-        Log("SSL_CTX_new failed");
-        goto failure;
-    }
-    SSL_CTX_set_min_proto_version(s_ssl_ctx, TLS1_3_VERSION);
-    SSL_CTX_set_max_proto_version(s_ssl_ctx, TLS1_3_VERSION);
-    SSL_CTX_set_default_verify_paths(s_ssl_ctx);
-    if (1 != SSL_CTX_use_certificate_chain_file(s_ssl_ctx, certificate)) {
-        Log("SSL_CTX_use_certificate_chain_file failed");
-        goto failure;
-    }
-    if (1 != SSL_CTX_use_PrivateKey_file(s_ssl_ctx, keyfile, SSL_FILETYPE_PEM)) {
-        Log("SSL_CTX_use_PrivateKey_file failed");
-        goto failure;
-    }
-    return s_ssl_ctx;
-failure:
-    SSL_CTX_free(s_ssl_ctx);
-    return NULL;
-}
-
 /* stream methods */
 
-lsquic_conn_ctx_t* server_on_new_connection(void* stream_if_ctx,
+lsquic_conn_ctx_t* server_on_new_connection(
+    void* stream_if_ctx,
     struct lsquic_conn* conn)
 {
     const lsquic_cid_t* cid = lsquic_conn_id(conn);
@@ -568,37 +608,50 @@ void server_on_closed_connection(lsquic_conn_t* conn)
     Log("Connection %s closed", cid_string);
 }
 
-lsquic_stream_ctx_t* server_on_new_stream(void* stream_if_ctx,
+lsquic_stream_ctx_t* server_on_new_stream(
+    void* stream_if_ctx,
     struct lsquic_stream* stream)
 {
-    return NULL;
+    lsquic_stream_ctx_t* stream_ctx = malloc(sizeof(*stream_ctx));
+    stream_ctx->stream = stream;
+    stream_ctx->v_server = stream_if_ctx;
+    stream_ctx->rcv_offset = 0;
+    stream_ctx->rcv_total_size = 0;
+    stream_ctx->file_handler = open_memstream(&stream_ctx->rcv_buffer, &stream_ctx->rcv_total_size);
+    stream_ctx->snd_offset = 0;
+    if (stream_ctx->file_handler < 0) {
+        Log("failed to opem memstream");
+    }
+    lsquic_stream_wantread(stream, 1);
+    return stream_ctx;
 }
 
-void server_on_read(struct lsquic_stream* stream, lsquic_stream_ctx_t* h)
+void server_on_read(struct lsquic_stream* stream, lsquic_stream_ctx_t* stream_ctx)
 {
-    server_stream_ctx* const stream_data = (void*)h;
-    ssize_t nread;
-    unsigned char buf[1];
+    struct lsquic_stream_ctx* const stream_data = (void*)stream_ctx;
+    ssize_t num_read;
+    unsigned char buf[0x400];
 
-    nread = lsquic_stream_read(stream, buf, sizeof(buf));
-    if (nread > 0) {
-        stream_data->buffer[stream_data->total_size] = buf[0];
-        lsquic_stream_id_t id = lsquic_stream_id(stream);
-        ++stream_data->total_size;
-        if (buf[0] == (unsigned char)'\n') {
-            Log("read newline or filled buffer, switch to writing");
-            // TODO: callback to treat data
-            lsquic_stream_wantread(stream, 0);
-            // lsquic_stream_wantwrite(stream, 1); // TODO: write back when it is not
-            // a final response
+    num_read = lsquic_stream_read(stream, buf, sizeof(buf));
+    if (num_read > 0) {
+        fwrite(buf, 1, num_read, stream_data->file_handler);
+        Log("read newline or filled buffer, switch to writing");
+        // TODO: callback to treat data
+        // lsquic_stream_wantwrite(stream, 1);
+        // TODO: write back when it is not a final response
+    } else if (num_read == 0) {
+        // TODO: adding null termination, (only for tests, remove later)
+        fwrite("", 1, 1, stream_data->file_handler);
+        fclose(stream_data->file_handler);
+        Log("read EOF, data received %s");
+        // NOTE: (all data read) complete request and relay response, then shutdown stream
+        lsquic_stream_shutdown(stream, SHUT_RD);
+        if (stream_data->rcv_total_size) {
+            // TODO: this is only for echoing, change later
+            stream_data->snd_total_size = stream_data->rcv_total_size;
+            stream_data->snd_buffer = stream_data->rcv_buffer;
+            lsquic_stream_wantwrite(stream, true);
         }
-    } else if (nread == 0) {
-        Log("read EOF");
-        // TODO: (all data read) complete request and relay response, then shutdown
-        // stream
-        lsquic_stream_shutdown(stream, 0);
-        if (stream_data->total_size)
-            lsquic_stream_wantwrite(stream, 1);
     } else {
         /* This should not happen */
         Log("error reading from stream (errno: %d) -- abort connection", errno);
@@ -606,9 +659,26 @@ void server_on_read(struct lsquic_stream* stream, lsquic_stream_ctx_t* h)
     }
 }
 
-void server_on_write(struct lsquic_stream* stream, lsquic_stream_ctx_t* h) { }
+// TODO: this is only an echo test, change later
+void server_on_write(struct lsquic_stream* stream, lsquic_stream_ctx_t* stream_ctx)
+{
+    ssize_t num_written;
+    num_written = lsquic_stream_write(stream, stream_ctx->snd_buffer, stream_ctx->snd_offset);
+    if (num_written > 0 && stream_ctx->snd_offset == stream_ctx->snd_total_size) {
+        Log("All data was written back, stopping stream");
+        lsquic_stream_close(stream);
+    } else if (num_written < 0) {
+        Log("lsquic_stream_write() returned %ld, abort connection", (long)num_written);
+        lsquic_conn_abort(lsquic_stream_conn(stream));
+    }
+}
 
-void server_on_close(struct lsquic_stream* stream, lsquic_stream_ctx_t* h) { }
+void server_on_close(struct lsquic_stream* stream, lsquic_stream_ctx_t* stream_ctx)
+{
+    Log("%s called, cleaning stream context", __func__);
+    free(stream_ctx->rcv_buffer); // TODO: not freeing snd_buffer because is echoing, change later
+    free(stream_ctx);
+}
 
 void process_ticker(Server* server)
 {
@@ -635,7 +705,7 @@ void reset_timer(EV_P_ ev_timer* timer, int revents)
     process_ticker(timer->data);
 }
 
-void prepare_server(Server* server)
+bool server_prepare(Server* server)
 {
     if (keylog_dir) {
         struct lsquic_hash_elem* elem = lsquic_hash_first(server->certificates);
@@ -644,9 +714,18 @@ void prepare_server(Server* server)
             SSL_CTX_set_keylog_callback(data->ssl_ctx, keylog_log_line);
         }
     }
-    struct v_server* e = NULL;
-    TAILQ_FOREACH(e, server->v_servers, v_server)
-    {
+
+    if (TAILQ_EMPTY(server->v_servers)) {
+        Log("no virtual servers where configured");
+        return false;
     }
-    // TODO: start v_servers
+
+    struct v_server* v = NULL;
+    TAILQ_FOREACH(v, server->v_servers, v_server)
+    {
+        ev_io_init(&v->socket_watcher, server_read_socket, v->socket_descriptor, EV_READ);
+        ev_io_start(server->event_loop, &v->socket_watcher);
+    }
+
+    return true;
 }
