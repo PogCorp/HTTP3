@@ -22,51 +22,26 @@ import (
 const addr = "localhost:4242"
 
 type QuicGoAdapter struct {
-	ConnectionIdChan chan string
-	ConnectionChan   chan quic.Connection
-	Connections      map[string]adapter.Connection
+	Streams map[int64]adapter.QuickStream
 }
 
 func NewQuicGoAdapter() adapter.QuicAdapter {
 	return &QuicGoAdapter{
-		ConnectionIdChan: make(chan string, 16),
-		ConnectionChan:   make(chan quic.Connection, 16),
-		Connections:      make(map[string]adapter.Connection),
+		Streams: make(map[int64]adapter.QuickStream),
 	}
 }
 
-func (q *QuicGoAdapter) consumeConnectionID() {
-	for value := range q.ConnectionIdChan {
-		fmt.Printf("Received ConnectionID: %s\n", value)
-		conn := <-q.ConnectionChan
-		fmt.Printf("Received Conn\n")
-		q.Connections[value] = NewConnection(conn, value)
-		fmt.Println("Connection registered\n")
-		q.OnNewConnection(q.Connections[value])
-		// go q.handleConnection(q.Connections[value])
+type quickServer struct {
+	adapter adapter.QuicAdapter
+}
+
+func NewQuickGoServer(adapter adapter.QuicAdapter) adapter.QuickServer {
+	return &quickServer{
+		adapter: adapter,
 	}
 }
 
-func (q *QuicGoAdapter) OnCancelledConnection(conn adapter.Connection) {
-	fmt.Printf("Connection with connection id: %s was cancelled\n", conn.ConnectionID())
-}
-
-func (q *QuicGoAdapter) OnNewConnection(conn adapter.Connection) {
-	defer conn.CloseWithError(0, "connection closed")
-
-	for {
-		stream, err := conn.AcceptStream(context.Background())
-		if err != nil {
-			log.Printf("Failed to accept stream: %v", err)
-			return
-		}
-
-		fmt.Printf("Handling stream from connection id: %s\n", conn.ConnectionID())
-		go conn.OnNewStream(stream)
-	}
-}
-
-func (q *QuicGoAdapter) Listen() error {
+func (q *quickServer) Listen() error {
 	qlogFilename := fmt.Sprintf("server_%s.qlog", time.Now().Format("20060102_150405"))
 	qlogFile, err := os.Create(filepath.Join(".", qlogFilename))
 	if err != nil {
@@ -74,12 +49,11 @@ func (q *QuicGoAdapter) Listen() error {
 	}
 	defer qlogFile.Close()
 
-	go q.consumeConnectionID()
-
 	config := &quic.Config{
 		EnableDatagrams: true,
 		Tracer: func(ctx context.Context, p logging.Perspective, ci quic.ConnectionID) *logging.ConnectionTracer {
-			q.ConnectionIdChan <- ci.String()
+			//q.ConnectionIdChan <- ci.String()
+			q.adapter.OnNewConnection(ci.String())
 			return qlog.NewConnectionTracer(qlogFile, p, ci)
 		},
 		MaxIdleTimeout: time.Minute * 30,
@@ -92,19 +66,95 @@ func (q *QuicGoAdapter) Listen() error {
 	defer listener.Close()
 
 	for {
-		conn, err := listener.Accept(context.Background())
+		ctx := context.Background()
+		conn, err := listener.Accept(ctx)
 		if err != nil {
 			log.Printf("Failed to accept connection: %v", err)
 			continue
 		}
 
-		q.ConnectionChan <- conn
-
-		// q.OnNewConnection(conn)
+		go q.handleConnection(ctx, conn)
 	}
 }
 
-func (q *QuicGoAdapter) handleConnection(conn adapter.Connection) {
+func (q *QuicGoAdapter) consumeConnectionID() {
+	// for value := range q.ConnectionIdChan {
+	// 	fmt.Printf("Received ConnectionID: %s\n", value)
+	// 	conn := <-q.ConnectionChan
+	// 	fmt.Printf("Received Conn\n")
+	// 	q.Connections[value] = NewConnection(conn, value)
+	// 	fmt.Println("Connection registered\n")
+	// 	q.OnNewConnection(q.Connections[value])
+	// 	// go q.handleConnection(q.Connections[value])
+	// }
+}
+
+func (q *QuicGoAdapter) OnNewStream(streamID int64) {
+	fmt.Printf("Accepted stream with id: %d\n", streamID)
+}
+
+func (q *QuicGoAdapter) OnReadStream(streamID int64, data []byte) {
+	fmt.Printf("Read stream: %d with content: %s\n", streamID, string(data))
+}
+
+func (q *QuicGoAdapter) OnCancelledConnection(connectionID string) {
+	fmt.Printf("Connection with connection id: %s was cancelled\n", connectionID)
+}
+
+func (q *QuicGoAdapter) OnNewConnection(connectionID string) {
+	fmt.Printf("Received ConnectionID: %s\n", connectionID)
+
+	// defer conn.CloseWithError(0, "connection closed")
+	//
+	// for {
+	// 	stream, err := conn.AcceptStream(context.Background())
+	// 	if err != nil {
+	// 		log.Printf("Failed to accept stream: %v", err)
+	// 		return
+	// 	}
+	//
+	// 	fmt.Printf("Handling stream from connection id: %s\n", conn.ConnectionID())
+	// 	go conn.OnNewStream(stream)
+	// }
+}
+
+func (q *quickServer) handleConnection(ctx context.Context, conn quic.Connection) {
+	for {
+		stream, err := conn.AcceptStream(ctx)
+		if err != nil {
+			//log.Printf("Failed to accept stream: %v", err)
+			// TODO: what to do when error
+			return
+		}
+		q.adapter.OnNewStream(int64(stream.StreamID()))
+		go q.handleStream(ctx, stream)
+	}
+}
+
+func (q *quickServer) handleStream(ctx context.Context, stream quic.Stream) {
+	defer stream.Close()
+	streamID := int64(stream.StreamID())
+	q.adapter.OnNewStream(streamID)
+
+	buf := make([]byte, 4096)
+
+	if _, err := stream.Read(buf); err != nil {
+		log.Printf("Failed to read from stream: %v", err)
+		return
+	}
+
+	fmt.Printf("Received DATA: %s\n", string(buf))
+	q.adapter.OnReadStream(streamID, buf)
+	q.simpleWrite("This is a response from server", stream)
+}
+
+func (q *quickServer) simpleWrite(data string, stream quic.Stream) {
+	if _, err := stream.Write([]byte(data)); err != nil {
+		log.Printf("Failed to write to stream: %v", err)
+		return
+	}
+
+	fmt.Printf("Server sent: '%s'\n", data)
 }
 
 type quicConnection struct {

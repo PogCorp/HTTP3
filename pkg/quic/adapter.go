@@ -5,10 +5,20 @@ import (
 	"io"
 )
 
-type QuicAdapter interface {
-	OnNewConnection(conn Connection)
-	OnCancelledConnection(conn Connection)
+type QuickServer interface {
 	Listen() error
+}
+
+type QuicAdapter interface {
+	OnReadStream(streamID int64, data []byte)
+	OnNewStream(streamID int64)
+	OnNewConnection(connectionID string)
+	OnCancelledConnection(connectionID string)
+}
+
+type QuickStream interface {
+	io.Writer
+	io.Closer
 }
 
 type Connection interface {
