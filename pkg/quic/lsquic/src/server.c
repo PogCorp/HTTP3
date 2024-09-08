@@ -23,15 +23,19 @@
 
 /* process ticker */
 void reset_timer(EV_P_ ev_timer* timer, int revents);
+void process_ticker(Server* server);
+
 /* ssl configuration */
-static SSL_CTX* server_get_ssl_ctx(void* peer_ctx,
+static SSL_CTX* server_get_ssl_ctx(
+    void* peer_ctx,
     const struct sockaddr* address);
-/* add alpn value */
-static void add_alpn(char* alpn, char* proto);
-/* send failure */
+
+/* add ALPN value */
+static bool add_alpn(char* alpn, char* proto);
+
+/* handlers for send failure */
 void handle_send_failure(Server* server, int fd);
 void schedule_resend(EV_P_ ev_io* ev_write, int revents);
-/* setup file descriptor */
 
 static const struct lsquic_stream_if stream_interface = {
     .on_new_conn = server_on_new_connection,
@@ -43,7 +47,12 @@ static const struct lsquic_stream_if stream_interface = {
 };
 
 // NOTE: There should be a wrapper func to GO here
-void newServer(Server* server, const char* keylog)
+void new_server(
+    Server* server,
+    const char* keylog,
+    char** alpn_protos,
+    size_t* alpn_str_size,
+    int alpn_proto_len)
 {
     // initialize every field with default 0
     memset(server, 0, sizeof(Server));
@@ -54,9 +63,17 @@ void newServer(Server* server, const char* keylog)
     struct lsquic_engine_api engine_api;
     struct lsquic_engine_settings settings;
     settings.es_ecn = LSQUIC_DF_ECN;
+    if (alpn_protos && alpn_str_size && alpn_proto_len > 0)
+        for (int i = 0; i < alpn_proto_len; i++) {
+            enum lsquic_version ver = lsquic_str2ver(alpn_protos[i], alpn_str_size[i]);
+            settings.es_versions = 1 << ver;
+            add_alpn(server->alpn, alpn_protos[i]);
+        }
+    else
+        settings.es_versions = 1 << LSQVER_I001; // default to version 1 of QUIC
 
     memset(&engine_api, 0, sizeof(engine_api));
-    engine_api.ea_packets_out = server_packets_out;
+    engine_api.ea_packets_out = server_write_socket;
     engine_api.ea_packets_out_ctx = server;
     engine_api.ea_get_ssl_ctx = server_get_ssl_ctx;
     engine_api.ea_stream_if = &stream_interface;
@@ -85,6 +102,66 @@ void newServer(Server* server, const char* keylog)
         Log("engine could not be created");
         return;
     }
+}
+
+// cleanup all virtual servers and event loop
+void server_cleanup(Server* server)
+{
+    struct v_server* e = NULL;
+    TAILQ_FOREACH(e, server->v_servers, v_server)
+    {
+        if (server->event_loop) {
+            ev_io_stop(server->event_loop, &e->socket_watcher);
+        }
+        if (e->socket_descriptor >= 0)
+            close(e->socket_descriptor);
+        packet_buffer_cleanup(e->buffer);
+    }
+
+    ev_timer_stop(server->event_loop, &server->time_watcher);
+    ev_loop_destroy(server->event_loop);
+    lsquic_engine_destroy(server->quic_engine);
+    lsquic_global_cleanup();
+}
+
+bool server_listen(Server* server)
+{
+    bool ok = server_prepare(server);
+    if (!ok) {
+        Log("failed to prepare server in %s", __func__);
+        return false;
+    }
+
+    ev_run(server->event_loop, 0);
+    server_cleanup(server);
+    return true;
+}
+
+/*
+ * Format used for ALPN
+ * ┌───┬───┬───┬──────┐
+ * │ 2 │ h │ 3 │ .... │
+ * └─┬─┴─┬─┴─┬─┴──────┘
+ *   │   │   │
+ *   │   └─> proto value
+ *   │
+ *   └─> lenght of proto
+ * */
+static bool add_alpn(char* alpn, char* proto)
+{
+    size_t proto_len, alpn_len;
+
+    proto_len = strlen(proto);
+    if (proto_len > ALPN_LEN)
+        return false;
+    alpn_len = strlen(alpn);
+    if (alpn_len + 1 + proto_len + 1 > ALPN_LEN)
+        return false;
+
+    alpn[alpn_len] = proto_len;
+    memcpy(&alpn[alpn_len + 1], proto, proto_len);
+    alpn[alpn_len + 1 + proto_len] = '\0';
+    return true;
 }
 
 bool add_v_server(Server* server, const char* uri,
@@ -119,8 +196,6 @@ bool add_v_server(Server* server, const char* uri,
     v_server->socket_watcher.data = v_server;
     v_server->server = server;
     TAILQ_INSERT_TAIL(server->v_servers, v_server, v_server);
-    ev_io_init(&v_server->socket_watcher, server_read_socket, v_server->socket_descriptor, EV_WRITE | EV_READ);
-    ev_io_start(server->event_loop, &v_server->socket_watcher);
 
     free(address);
     return true;
