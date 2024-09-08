@@ -7,5 +7,7 @@ import (
 func main() {
 	var adapter = quicgo.NewQuicGoAdapter()
 
-	adapter.Listen()
+	var server = quicgo.NewQuickGoServer(adapter)
+
+	server.Listen()
 }
