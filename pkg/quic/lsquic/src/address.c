@@ -1,4 +1,4 @@
-#include "logger.c"
+#include "logger.h"
 #include "server.h"
 #include <arpa/inet.h>
 #include <assert.h>

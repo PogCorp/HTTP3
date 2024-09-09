@@ -30,6 +30,8 @@ static SSL_CTX* server_get_ssl_ctx(
     void* peer_ctx,
     const struct sockaddr* address);
 
+bool set_ssl_ctx(Server* server, const char* keylog_dir);
+
 /* add ALPN value */
 static bool add_alpn(char* alpn, char* proto);
 
@@ -47,7 +49,7 @@ static const struct lsquic_stream_if stream_interface = {
 };
 
 // NOTE: There should be a wrapper func to GO here
-void new_server(
+bool new_server(
     Server* server,
     const char* keylog,
     char** alpn_protos,
@@ -57,20 +59,25 @@ void new_server(
     // initialize every field with default 0
     memset(server, 0, sizeof(Server));
     server->event_loop = EV_DEFAULT;
+    TAILQ_INIT(&server->v_servers);
 
     // registering callbacks and starting engine
     char errbuf[0x100];
     struct lsquic_engine_api engine_api;
-    struct lsquic_engine_settings settings;
-    settings.es_ecn = LSQUIC_DF_ECN;
+    lsquic_engine_init_settings(&server->quic_settings, LSENG_SERVER);
+    server->quic_settings.es_ecn = LSQUIC_DF_ECN;
     if (alpn_protos && alpn_str_size && alpn_proto_len > 0)
         for (int i = 0; i < alpn_proto_len; i++) {
-            enum lsquic_version ver = lsquic_str2ver(alpn_protos[i], alpn_str_size[i]);
-            settings.es_versions = 1 << ver;
+            int ver = lsquic_str2ver(alpn_protos[i], alpn_str_size[i]);
+            if (ver < 0) {
+                server->quic_settings.es_versions = 1 << LSQVER_I001;
+            } else {
+                server->quic_settings.es_versions = 1 << ver;
+            }
             add_alpn(server->alpn, alpn_protos[i]);
         }
     else
-        settings.es_versions = 1 << LSQVER_I001; // default to version 1 of QUIC
+        server->quic_settings.es_versions = 1 << LSQVER_I001; // default to version 1 of QUIC
 
     memset(&engine_api, 0, sizeof(engine_api));
     engine_api.ea_packets_out = server_write_socket;
@@ -78,37 +85,46 @@ void new_server(
     engine_api.ea_get_ssl_ctx = server_get_ssl_ctx;
     engine_api.ea_stream_if = &stream_interface;
     engine_api.ea_stream_if_ctx = server;
-    engine_api.ea_settings = &settings;
+    engine_api.ea_settings = &server->quic_settings;
     engine_api.ea_get_ssl_ctx = get_ssl_ctx;
 
     /* certificates */
     server->certificates = lsquic_hash_create();
     engine_api.ea_lookup_cert = lookup_cert_callback;
-    engine_api.ea_cert_lu_ctx = &server->certificates;
-
-    if (0 != lsquic_engine_check_settings(&settings, LSENG_SERVER, errbuf, sizeof(errbuf))) {
-        errno = EINVAL;
-        Log("invalid settings passed: %s", errbuf);
-        return;
+    engine_api.ea_cert_lu_ctx = server->certificates;
+    bool ok = set_ssl_ctx(server, keylog_dir);
+    if (!ok) {
+        Log("failed to set ssl ctx");
+        return false;
     }
 
-    const char* keylog_dir = getenv("KEYLOG_DIR");
-    setup_keylog_dir(keylog_dir);
+    lsquic_global_init(LSQUIC_GLOBAL_SERVER);
+    if (0 != lsquic_engine_check_settings(&server->quic_settings, LSENG_SERVER, errbuf, sizeof(errbuf))) {
+        errno = EINVAL;
+        Log("invalid settings passed: %s", errbuf);
+        return false;
+    }
+
+    setup_keylog_dir(keylog);
 
     server->quic_engine = lsquic_engine_new(LSENG_SERVER, &engine_api);
     if (server->quic_engine == NULL) {
         // TODO: select a more appropriate errno value here
         errno = ENOPROTOOPT;
         Log("engine could not be created");
-        return;
+        return false;
     }
+
+    server->time_watcher.data = server;
+
+    return true;
 }
 
 // cleanup all virtual servers and event loop
 void server_cleanup(Server* server)
 {
     struct v_server* e = NULL;
-    TAILQ_FOREACH(e, server->v_servers, v_server)
+    TAILQ_FOREACH(e, &server->v_servers, v_server)
     {
         if (server->event_loop) {
             ev_io_stop(server->event_loop, &e->socket_watcher);
@@ -120,6 +136,8 @@ void server_cleanup(Server* server)
 
     ev_timer_stop(server->event_loop, &server->time_watcher);
     ev_loop_destroy(server->event_loop);
+    SSL_CTX_free(server->ssl_ctx);
+    clean_certificates(server->certificates);
     lsquic_engine_destroy(server->quic_engine);
     lsquic_global_cleanup();
 }
@@ -129,6 +147,7 @@ bool server_listen(Server* server)
     bool ok = server_prepare(server);
     if (!ok) {
         Log("failed to prepare server in %s", __func__);
+        server_cleanup(server);
         return false;
     }
 
@@ -137,6 +156,7 @@ bool server_listen(Server* server)
     return true;
 }
 
+// TODO: improvement, pass the size of proto as parameter
 /*
  * Format used for ALPN
  * ┌───┬───┬───┬──────┐
@@ -195,7 +215,7 @@ bool add_v_server(Server* server, const char* uri,
     v_server->buffer = new_packet_buffer(v_server->socket_descriptor);
     v_server->socket_watcher.data = v_server;
     v_server->server = server;
-    TAILQ_INSERT_TAIL(server->v_servers, v_server, v_server);
+    TAILQ_INSERT_TAIL(&server->v_servers, v_server, v_server);
 
     free(address);
     return true;
@@ -429,7 +449,7 @@ static int server_write_socket(
     const struct lsquic_out_spec* specs,
     unsigned count)
 {
-    struct v_server* v_server = packets_out_ctx;
+    Server* server = packets_out_ctx;
     int fd, response = 0;
     struct mmsghdr messages[MAX_OUT_BATCH_SIZE];
     enum cmsg_opts opts;
@@ -443,6 +463,8 @@ static int server_write_socket(
 
     if (0 == count)
         return 0;
+
+    fd = TAILQ_FIRST(&server->v_servers)->socket_descriptor;
 
     for (int i = 0; i < count && i < MAX_OUT_BATCH_SIZE; i++) {
         messages[i].msg_hdr.msg_flags = 0;
@@ -469,7 +491,7 @@ static int server_write_socket(
 
     response = sendmmsg(fd, messages, count, 0);
     if (response < (int)count) {
-        handle_send_failure(v_server->server, fd);
+        handle_send_failure(server, fd);
         if (response < 0) {
             Log("sendmsg failed: %s", strerror(errno));
         } else if (response > 0) {
@@ -568,8 +590,6 @@ static SSL_CTX* server_get_ssl_ctx(void* peer_ctx,
 
 bool set_ssl_ctx(Server* server, const char* keylog_dir)
 {
-    unsigned char ticket_keys[48];
-
     server->ssl_ctx = SSL_CTX_new(TLS_method());
     if (!server->ssl_ctx) {
         Log("failed to instatiate new SSL_CTX");
@@ -584,7 +604,7 @@ bool set_ssl_ctx(Server* server, const char* keylog_dir)
         SSL_CTX_set_keylog_callback(server->ssl_ctx, keylog_log_line);
 
     // TODO: look for certificate resumption
-    return 0;
+    return true;
 }
 
 /* stream methods */
@@ -715,13 +735,13 @@ bool server_prepare(Server* server)
         }
     }
 
-    if (TAILQ_EMPTY(server->v_servers)) {
+    if (TAILQ_EMPTY(&server->v_servers)) {
         Log("no virtual servers where configured");
         return false;
     }
 
     struct v_server* v = NULL;
-    TAILQ_FOREACH(v, server->v_servers, v_server)
+    TAILQ_FOREACH(v, &server->v_servers, v_server)
     {
         ev_io_init(&v->socket_watcher, server_read_socket, v->socket_descriptor, EV_READ);
         ev_io_start(server->event_loop, &v->socket_watcher);
