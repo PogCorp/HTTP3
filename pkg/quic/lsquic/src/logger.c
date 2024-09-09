@@ -2,13 +2,12 @@
 
 #include <stdarg.h>
 #include <stdio.h>
-#pragma once
 
 static FILE* log_stream = NULL;
 
 void Log(const char* fmt, ...)
 {
-    if (log_stream) {
+    if (log_stream != NULL) {
         va_list ap;
         fprintf(log_stream, "[Server]: ");
         va_start(ap, fmt);
