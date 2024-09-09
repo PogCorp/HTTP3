@@ -57,7 +57,7 @@ struct ssl_ctx_st* lookup_cert_callback(void* cert_ctx,
     return NULL;
 }
 
-bool load_certificate(struct lsquic_hash* certs, const char* hostname,
+bool load_certificate(struct lsquic_hash* certs, const char* sni,
     const char* certfile, const char* keyfile, char* alpn,
     bool early_data)
 {
@@ -67,7 +67,7 @@ bool load_certificate(struct lsquic_hash* certs, const char* hostname,
     FILE* f = NULL;
 
     cert = calloc(1, sizeof(*cert));
-    cert->sni = strdup(hostname);
+    cert->sni = strdup(sni);
     cert->ssl_ctx = SSL_CTX_new(TLS_method());
     if (!cert->ssl_ctx) {
         Log("at %s, SSL_CTX_new failed", __func__);
@@ -93,8 +93,7 @@ bool load_certificate(struct lsquic_hash* certs, const char* hostname,
     const int prev = SSL_CTX_set_session_cache_mode(cert->ssl_ctx, 1);
     Log("set SSL session cache mode to 1, previous value was %d", prev);
 
-    if (lsquic_hash_insert(certs, cert->sni, strlen(cert->sni), cert,
-            &cert->hash_el))
+    if (lsquic_hash_insert(certs, cert->sni, strlen(cert->sni), cert, &cert->hash_el))
         ok = true;
     else
         Log("certificate with sni %s was not inserted in certificate table",
