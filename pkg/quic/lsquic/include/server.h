@@ -41,9 +41,10 @@ typedef struct server {
     struct ev_loop* event_loop;
     SSL_CTX* ssl_ctx;
     lsquic_engine_t* quic_engine;
+    struct lsquic_engine_settings quic_settings;
     char alpn[ALPN_LEN];
     struct lsquic_hash* certificates;
-    struct v_servers* v_servers;
+    struct v_servers v_servers;
     // interface QuicAdapter adapter_callbacks;
 } Server;
 
@@ -98,7 +99,7 @@ struct lsquic_stream_ctx {
  * consumer must check errno to ensure that the configuration was appropriate
  * and server can listen
  * */
-void new_server(
+bool new_server(
     Server* server,
     const char* keylog,
     char** alpn_protos,
