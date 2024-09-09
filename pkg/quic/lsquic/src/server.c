@@ -248,18 +248,17 @@ struct packet_buffer* new_packet_buffer(int fd)
     packet_buf->buffer_size = receive_size;
     packet_buf->packet_amount = num_packets;
     packet_buf->ecn = malloc(num_packets * sizeof(packet_buf->ecn[0]));
+    packet_buf->packets = malloc(num_packets * sizeof(packet_buf->packets[0]));
 
     for (int n = 0; n < num_packets; ++n) {
         packet_buf->vecs[n].iov_base = packet_buf->buffer_data + MAX_PACKET_SIZE * n;
         packet_buf->vecs[n].iov_len = MAX_PACKET_SIZE;
-        packet_buf->packets[n].msg_hdr = (struct msghdr) {
-            .msg_name = &packet_buf->peer_addresses[n],
-            .msg_namelen = sizeof(packet_buf->peer_addresses[n]),
-            .msg_iov = &packet_buf->vecs[n],
-            .msg_iovlen = 1,
-            .msg_control = packet_buf->cmsg_data + CMSG_SIZE * n,
-            .msg_controllen = CMSG_SIZE,
-        };
+        packet_buf->packets[n].msg_hdr.msg_name = &packet_buf->peer_addresses[n];
+        packet_buf->packets[n].msg_hdr.msg_namelen = sizeof(packet_buf->peer_addresses[n]);
+        packet_buf->packets[n].msg_hdr.msg_iov = &packet_buf->vecs[n];
+        packet_buf->packets[n].msg_hdr.msg_iovlen = 1,
+        packet_buf->packets[n].msg_hdr.msg_control = packet_buf->cmsg_data + CMSG_SIZE * n;
+        packet_buf->packets[n].msg_hdr.msg_controllen = CMSG_SIZE;
     }
 
     return packet_buf;
@@ -468,20 +467,18 @@ static int server_write_socket(
 
     for (int i = 0; i < count && i < MAX_OUT_BATCH_SIZE; i++) {
         messages[i].msg_hdr.msg_flags = 0;
-        unsigned n = 0;
-        fd = (int)(uint64_t)specs[n].peer_ctx;
-        messages[i].msg_hdr.msg_name = (void*)specs[n].dest_sa;
-        messages[i].msg_hdr.msg_namelen = (AF_INET == specs[n].dest_sa->sa_family
+        messages[i].msg_hdr.msg_name = (void*)specs[i].dest_sa;
+        messages[i].msg_hdr.msg_namelen = (AF_INET == specs[i].dest_sa->sa_family
                 ? sizeof(struct sockaddr_in)
                 : sizeof(struct sockaddr_in6)),
-        messages[i].msg_hdr.msg_iov = specs[n].iov;
-        messages[i].msg_hdr.msg_iovlen = specs[n].iovlen;
+        messages[i].msg_hdr.msg_iov = specs[i].iov;
+        messages[i].msg_hdr.msg_iovlen = specs[i].iovlen;
 
         opts = SEND_ADDR;
-        if (specs[n].ecn)
+        if (specs[i].ecn)
             opts |= SEND_ECN;
         if (opts)
-            format_control_message(&messages[i].msg_hdr, opts, &specs[n], ancillary[i].buf,
+            format_control_message(&messages[i].msg_hdr, opts, &specs[i], ancillary[i].buf,
                 sizeof(ancillary[i].buf));
         else {
             messages[i].msg_hdr.msg_control = NULL;
@@ -519,7 +516,7 @@ enum ReadStatus receive_packets(struct v_server* v_server, unsigned int* packets
         return ERROR;
     }
 
-    for (i = 0; i < buffer->packet_amount; i++) {
+    for (i = 0; i < response; i++) {
         local_address = &buffer->local_addresses[i];
         memcpy(local_address, &v_server->local_address, sizeof(*local_address));
         dropped_packets = 0;
@@ -535,13 +532,13 @@ enum ReadStatus receive_packets(struct v_server* v_server, unsigned int* packets
 void server_read_socket(EV_P_ ev_io* w, int revents)
 {
     enum ReadStatus status;
-    unsigned int i, read_packets, batches;
+    unsigned int i, read_packets = 0, batches = 0;
     struct v_server* v_server = w->data;
     struct packet_buffer* buffer = v_server->buffer;
     lsquic_engine_t* engine = v_server->server->quic_engine;
 
     do {
-        receive_packets(v_server, &read_packets);
+        status = receive_packets(v_server, &read_packets);
         batches += read_packets > 0;
         for (i = 0; i < read_packets; i++) {
             if (0 > lsquic_engine_packet_in(
