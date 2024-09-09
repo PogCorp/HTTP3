@@ -26,7 +26,7 @@ IF(BUILD_LSQUIC)
     TARGET_LINK_LIBRARIES(lsquic_adapter PRIVATE
         ${CMAKE_SOURCE_DIR}/lsquic/src/liblsquic/liblsquic.so
         ${CMAKE_SOURCE_DIR}/boringssl/crypto/libcrypto.so
-        ${CMAKE_SOURCE_DIR}/boringssl/ssl/libssl.so z ev)
+        ${CMAKE_SOURCE_DIR}/boringssl/ssl/libssl.so z ev m)
     add_executable(echo_test.out cmd/echo_test.c)
     target_link_libraries(echo_test.out lsquic_adapter)
 ENDIF()
