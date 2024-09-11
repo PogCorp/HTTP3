@@ -15,9 +15,11 @@
 #include "ancillary.h"
 #include "cert.h"
 #include "keylog.h"
+#include "logger.h"
 #include "lsquic.h"
 #include "lsquic_hash.h"
 #include "lsquic_int_types.h"
+#include "lsquic_logger.h"
 #include "lsquic_util.h"
 #include "server.h"
 
@@ -63,7 +65,6 @@ bool new_server(
 
     // registering callbacks and starting engine
     char errbuf[0x100];
-    struct lsquic_engine_api engine_api;
     lsquic_engine_init_settings(&server->quic_settings, LSENG_SERVER);
     server->quic_settings.es_ecn = LSQUIC_DF_ECN;
     if (alpn_protos && alpn_str_size && alpn_proto_len > 0)
@@ -79,19 +80,18 @@ bool new_server(
     else
         server->quic_settings.es_versions = 1 << LSQVER_I001; // default to version 1 of QUIC
 
-    memset(&engine_api, 0, sizeof(engine_api));
-    engine_api.ea_packets_out = server_write_socket;
-    engine_api.ea_packets_out_ctx = server;
-    engine_api.ea_get_ssl_ctx = server_get_ssl_ctx;
-    engine_api.ea_stream_if = &stream_interface;
-    engine_api.ea_stream_if_ctx = server;
-    engine_api.ea_settings = &server->quic_settings;
-    engine_api.ea_get_ssl_ctx = get_ssl_ctx;
+    server->engine_api.ea_packets_out = server_write_socket;
+    server->engine_api.ea_packets_out_ctx = server;
+    server->engine_api.ea_get_ssl_ctx = server_get_ssl_ctx;
+    server->engine_api.ea_stream_if = &stream_interface;
+    server->engine_api.ea_stream_if_ctx = server;
+    server->engine_api.ea_settings = &server->quic_settings;
+    server->engine_api.ea_get_ssl_ctx = get_ssl_ctx;
 
     /* certificates */
     server->certificates = lsquic_hash_create();
-    engine_api.ea_lookup_cert = lookup_cert_callback;
-    engine_api.ea_cert_lu_ctx = server->certificates;
+    server->engine_api.ea_lookup_cert = lookup_cert_callback;
+    server->engine_api.ea_cert_lu_ctx = server->certificates;
     bool ok = set_ssl_ctx(server, keylog_dir);
     if (!ok) {
         Log("failed to set ssl ctx");
@@ -105,9 +105,12 @@ bool new_server(
         return false;
     }
 
+    lsquic_log_to_fstream(stdout, LLTS_HHMMSSMS);
+    lsquic_set_log_level("debug");
+
     setup_keylog_dir(keylog);
 
-    server->quic_engine = lsquic_engine_new(LSENG_SERVER, &engine_api);
+    server->quic_engine = lsquic_engine_new(LSENG_SERVER, &server->engine_api);
     if (server->quic_engine == NULL) {
         // TODO: select a more appropriate errno value here
         errno = ENOPROTOOPT;
@@ -116,6 +119,8 @@ bool new_server(
     }
 
     server->time_watcher.data = server;
+    ev_timer_init(&server->time_watcher, reset_timer, 0, 0);
+    ev_timer_start(server->event_loop, &server->time_watcher);
 
     return true;
 }
@@ -205,7 +210,11 @@ bool add_v_server(Server* server, const char* uri,
     }
 
     struct v_server* v_server = calloc(1, sizeof(struct v_server));
-    v_server_set_address_info(v_server, host, port);
+    ok = v_server_set_address_info(v_server, host, port);
+    if (!ok) {
+        Log("failed to bind socket for %s", uri);
+        return false;
+    }
     ok = v_server_configure_socket(v_server);
     if (!ok) {
         Log("failed to configure socket for %s", uri);
@@ -240,17 +249,17 @@ struct packet_buffer* new_packet_buffer(int fd)
     receive_size += MAX_PACKET_SIZE;
 
     packet_buf = calloc(1, sizeof(*packet_buf));
+    packet_buf->buffer_size = receive_size;
+    packet_buf->packet_amount = num_packets;
     packet_buf->buffer_data = malloc(receive_size);
     packet_buf->cmsg_data = malloc(num_packets * CMSG_SIZE);
     packet_buf->vecs = malloc(num_packets * sizeof(packet_buf->vecs[0]));
     packet_buf->local_addresses = malloc(num_packets * sizeof(packet_buf->local_addresses[0]));
     packet_buf->peer_addresses = malloc(num_packets * sizeof(packet_buf->peer_addresses[0]));
-    packet_buf->buffer_size = receive_size;
-    packet_buf->packet_amount = num_packets;
     packet_buf->ecn = malloc(num_packets * sizeof(packet_buf->ecn[0]));
     packet_buf->packets = malloc(num_packets * sizeof(packet_buf->packets[0]));
 
-    for (int n = 0; n < num_packets; ++n) {
+    for (unsigned int n = 0; n < num_packets; ++n) {
         packet_buf->vecs[n].iov_base = packet_buf->buffer_data + MAX_PACKET_SIZE * n;
         packet_buf->vecs[n].iov_len = MAX_PACKET_SIZE;
         packet_buf->packets[n].msg_hdr.msg_name = &packet_buf->peer_addresses[n];
@@ -370,8 +379,8 @@ bool v_server_configure_socket(struct v_server* v_server)
             return false;
         }
     } else if (AF_INET6 == sa_local->sa_family) {
-        int on = IP_PMTUDISC_PROBE;
-        s = setsockopt(sockfd, IPPROTO_IPV6, IPV6_MTU_DISCOVER, &on, sizeof(on));
+        int opt = IP_PMTUDISC_PROBE;
+        s = setsockopt(sockfd, IPPROTO_IPV6, IPV6_MTU_DISCOVER, &opt, sizeof(opt));
     }
 
     on = 1;
@@ -434,6 +443,11 @@ bool v_server_configure_socket(struct v_server* v_server)
                 addr_str, sizeof(addr_str)),
             ntohs(((struct sockaddr_in*)sa_local)->sin_port));
         break;
+    case AF_INET6:
+        break;
+    default:
+        Log("invalid sa_family while configuring socket");
+        return false;
     }
 
     v_server->socket_descriptor = sockfd;
@@ -463,9 +477,11 @@ static int server_write_socket(
     if (0 == count)
         return 0;
 
+    // FIXME: peer_ctx should pass the file descripto as well. Add struct containing ssl ctx and fd
+    // fd = *(int*)specs->peer_ctx;
     fd = TAILQ_FIRST(&server->v_servers)->socket_descriptor;
 
-    for (int i = 0; i < count && i < MAX_OUT_BATCH_SIZE; i++) {
+    for (unsigned int i = 0; i < count && i < MAX_OUT_BATCH_SIZE; i++) {
         messages[i].msg_hdr.msg_flags = 0;
         messages[i].msg_hdr.msg_name = (void*)specs[i].dest_sa;
         messages[i].msg_hdr.msg_namelen = (AF_INET == specs[i].dest_sa->sa_family
@@ -507,7 +523,7 @@ enum ReadStatus receive_packets(struct v_server* v_server, unsigned int* packets
     struct sockaddr_storage* local_address;
     uint32_t dropped_packets;
     int response;
-    unsigned int i;
+    int i;
 
     response = recvmmsg(v_server->socket_descriptor, buffer->packets, buffer->packet_amount, 0, NULL);
     if (response < 0) {
@@ -579,7 +595,7 @@ void schedule_resend(EV_P_ ev_io* ev_write, int revents)
 /* ssl methods */
 
 static SSL_CTX* server_get_ssl_ctx(void* peer_ctx,
-    const struct sockaddr* address)
+    const struct sockaddr* _)
 {
     SSL_CTX* ssl_ctx = (SSL_CTX*)peer_ctx;
     return ssl_ctx;
@@ -606,6 +622,19 @@ bool set_ssl_ctx(Server* server, const char* keylog_dir)
 
 /* stream methods */
 
+void print_conn_info(const lsquic_conn_t* conn)
+{
+    const char* cipher;
+
+    cipher = lsquic_conn_crypto_cipher(conn);
+
+    Log("Connection info: version: %u; cipher: %s; key size: %d, alg key size: %d",
+        lsquic_conn_quic_version(conn),
+        cipher ? cipher : "<null>",
+        lsquic_conn_crypto_keysize(conn),
+        lsquic_conn_crypto_alg_keysize(conn));
+}
+
 lsquic_conn_ctx_t* server_on_new_connection(
     void* stream_if_ctx,
     struct lsquic_conn* conn)
@@ -613,7 +642,9 @@ lsquic_conn_ctx_t* server_on_new_connection(
     const lsquic_cid_t* cid = lsquic_conn_id(conn);
     char cid_string[0x29];
     lsquic_hexstr(cid->idbuf, cid->len, cid_string, sizeof(cid_string));
-    Log("new connection %s", cid_string);
+    const char* sni = lsquic_conn_get_sni(conn);
+    Log("new connection %s, for sni: %s", cid_string, sni ? sni : "not set");
+    print_conn_info(conn);
     return NULL;
 }
 
@@ -629,6 +660,8 @@ lsquic_stream_ctx_t* server_on_new_stream(
     void* stream_if_ctx,
     struct lsquic_stream* stream)
 {
+    lsquic_stream_id_t id = lsquic_stream_id(stream);
+    Log("New Stream with id: %d", id);
     lsquic_stream_ctx_t* stream_ctx = malloc(sizeof(*stream_ctx));
     stream_ctx->stream = stream;
     stream_ctx->v_server = stream_if_ctx;
@@ -638,8 +671,10 @@ lsquic_stream_ctx_t* server_on_new_stream(
     stream_ctx->snd_offset = 0;
     if (stream_ctx->file_handler < 0) {
         Log("failed to opem memstream");
+        free(stream_ctx);
+        return NULL;
     }
-    lsquic_stream_wantread(stream, 1);
+    lsquic_stream_wantread(stream, true);
     return stream_ctx;
 }
 
@@ -649,14 +684,17 @@ void server_on_read(struct lsquic_stream* stream, lsquic_stream_ctx_t* stream_ct
     ssize_t num_read;
     unsigned char buf[0x400];
 
+    if (stream_ctx == NULL) {
+        Log("in %s: received NULL context", __func__);
+        lsquic_stream_close(stream);
+        return;
+    }
+
+    lsquic_stream_id_t id = lsquic_stream_id(stream);
+    Log("Trying to read from Stream with id: %d", id);
     num_read = lsquic_stream_read(stream, buf, sizeof(buf));
-    if (num_read > 0) {
-        fwrite(buf, 1, num_read, stream_data->file_handler);
-        Log("read newline or filled buffer, switch to writing");
-        // TODO: callback to treat data
-        // lsquic_stream_wantwrite(stream, 1);
-        // TODO: write back when it is not a final response
-    } else if (num_read == 0) {
+
+    if (num_read == 0) {
         // TODO: adding null termination, (only for tests, remove later)
         fwrite("", 1, 1, stream_data->file_handler);
         fclose(stream_data->file_handler);
@@ -669,17 +707,28 @@ void server_on_read(struct lsquic_stream* stream, lsquic_stream_ctx_t* stream_ct
             stream_data->snd_buffer = stream_data->rcv_buffer;
             lsquic_stream_wantwrite(stream, true);
         }
-    } else {
+    }
+
+    if (num_read < 0) {
         /* This should not happen */
         Log("error reading from stream (errno: %d) -- abort connection", errno);
         lsquic_conn_abort(lsquic_stream_conn(stream));
     }
+
+    fwrite(buf, 1, num_read, stream_data->file_handler);
+    Log("continue reading");
+    // TODO: callback to treat data
+    // lsquic_stream_wantwrite(stream, 1);
+    // TODO: write back when it is not a final response
+    return;
 }
 
 // TODO: this is only an echo test, change later
 void server_on_write(struct lsquic_stream* stream, lsquic_stream_ctx_t* stream_ctx)
 {
     ssize_t num_written;
+    lsquic_stream_id_t id = lsquic_stream_id(stream);
+    Log("Trying to write to Stream with id: %d", id);
     num_written = lsquic_stream_write(stream, stream_ctx->snd_buffer, stream_ctx->snd_offset);
     if (num_written > 0 && stream_ctx->snd_offset == stream_ctx->snd_total_size) {
         Log("All data was written back, stopping stream");
@@ -706,12 +755,12 @@ void process_ticker(Server* server)
     lsquic_engine_process_conns(server->quic_engine);
 
     if (lsquic_engine_earliest_adv_tick(server->quic_engine, &time_diff)) {
-        if (time_diff >= LSQUIC_DF_CLOCK_GRANULARITY)
+        if ((unsigned)time_diff >= server->quic_settings.es_clock_granularity)
             timeout = (ev_tstamp)time_diff / 1000000;
         else if (time_diff <= 0)
             timeout = 0.0;
         else
-            timeout = (ev_tstamp)LSQUIC_DF_CLOCK_GRANULARITY / 1000000;
+            timeout = (ev_tstamp)server->quic_settings.es_clock_granularity / 1000000;
         ev_timer_init(&server->time_watcher, reset_timer, timeout, 0.);
         ev_timer_start(server->event_loop, &server->time_watcher);
     }
