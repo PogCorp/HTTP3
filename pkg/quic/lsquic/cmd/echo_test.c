@@ -9,7 +9,7 @@
         }                                                              \
     } while (0)
 
-int main(int argc, char* argv[])
+int main(int _, char* argv[])
 {
     Server server;
     bool ok;
@@ -27,7 +27,7 @@ int main(int argc, char* argv[])
         return EXIT_FAILURE;
     }
 
-    ok = new_server(&server, "./keylog/", alpn, alpn_size, sizeof(alpn_size) / sizeof(alpn_size[0]));
+    ok = new_server(&server, "./keylog", alpn, alpn_size, sizeof(alpn_size) / sizeof(alpn_size[0]));
     if (!ok) {
         Log("failure while creating new_server");
         return EXIT_FAILURE;

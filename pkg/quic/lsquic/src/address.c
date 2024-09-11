@@ -81,7 +81,6 @@ static bool v_server_set_address_info(
         address->addr6.sin6_port = htons(port_num);
         server->ip_ver = IPV6;
     } else {
-        Log("passed on an valid IP address: '%s'", host);
         memset(&hints, 0, sizeof(hints));
         hints.ai_flags = AI_NUMERICSERV;
         err = getaddrinfo(host, port, &hints, &res);
@@ -100,6 +99,7 @@ static bool v_server_set_address_info(
             server->ip_ver = IPV6;
         memcpy(&server->sas, res->ai_addr, res->ai_addrlen);
         ok = true;
+        Log("passed on an valid IP address: '%s', running with '%s'", host, res->ai_family == AF_INET ? "IPV4" : "IPV6");
     }
 
 defer:
