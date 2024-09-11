@@ -45,6 +45,7 @@ typedef struct server {
     char alpn[ALPN_LEN];
     struct lsquic_hash* certificates;
     struct v_servers v_servers;
+    struct lsquic_engine_api engine_api;
     // interface QuicAdapter adapter_callbacks;
 } Server;
 
