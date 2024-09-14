@@ -19,7 +19,6 @@
 #include "lsquic.h"
 #include "lsquic_hash.h"
 #include "lsquic_int_types.h"
-#include "lsquic_logger.h"
 #include "lsquic_util.h"
 #include "server.h"
 
@@ -53,10 +52,7 @@ static const struct lsquic_stream_if stream_interface = {
 // NOTE: There should be a wrapper func to GO here
 bool new_server(
     Server* server,
-    const char* keylog,
-    char** alpn_protos,
-    size_t* alpn_str_size,
-    int alpn_proto_len)
+    const char* keylog)
 {
     // initialize every field with default 0
     memset(server, 0, sizeof(Server));
@@ -65,17 +61,8 @@ bool new_server(
 
     // registering callbacks and starting engine
     lsquic_engine_init_settings(&server->quic_settings, LSENG_SERVER);
+    server->quic_settings.es_versions = 1 << LSQVER_I001; // default to version 1 of QUIC
     server->quic_settings.es_ecn = LSQUIC_DF_ECN;
-    if (alpn_protos && alpn_str_size && alpn_proto_len > 0)
-        for (int i = 0; i < alpn_proto_len; i++) {
-            int ver = lsquic_str2ver(alpn_protos[i], alpn_str_size[i]);
-            if (ver >= 0) {
-                server->quic_settings.es_versions = 1 << ver;
-            }
-            add_alpn(server->alpn, alpn_protos[i]);
-        }
-    else
-        server->quic_settings.es_versions = 1 << LSQVER_I001; // default to version 1 of QUIC
 
     server->engine_api.ea_packets_out = server_write_socket;
     server->engine_api.ea_packets_out_ctx = server;
@@ -94,9 +81,6 @@ bool new_server(
         return false;
     }
 
-    lsquic_log_to_fstream(stdout, LLTS_HHMMSSMS);
-    lsquic_set_log_level("debug");
-
     setup_keylog_dir(keylog);
 
     server->quic_engine = lsquic_engine_new(LSENG_SERVER, &server->engine_api);
@@ -108,6 +92,15 @@ bool new_server(
     }
 
     return true;
+}
+
+void server_add_alpn(Server* server, char* const proto)
+{
+    add_alpn(server->alpn, proto);
+    int ver = lsquic_str2ver(proto, strlen(proto));
+    if (ver >= 0) {
+        server->quic_settings.es_versions = 1 << ver;
+    }
 }
 
 // cleanup all virtual servers and event loop
@@ -449,7 +442,7 @@ bool v_server_configure_socket(struct v_server* v_server)
 
 /* connection methods */
 
-static int server_write_socket(
+int server_write_socket(
     void* packets_out_ctx,
     const struct lsquic_out_spec* specs,
     unsigned count)
@@ -665,14 +658,11 @@ lsquic_stream_ctx_t* server_on_new_stream(
 {
     lsquic_stream_id_t id = lsquic_stream_id(stream);
     Log("New Stream with id: %d", id);
-    lsquic_stream_ctx_t* stream_ctx = malloc(sizeof(*stream_ctx));
+    lsquic_stream_ctx_t* stream_ctx = calloc(1, sizeof(*stream_ctx));
     stream_ctx->stream = stream;
-    stream_ctx->v_server = stream_if_ctx;
-    stream_ctx->rcv_offset = 0;
-    stream_ctx->rcv_total_size = 0;
+    stream_ctx->server = stream_if_ctx;
     stream_ctx->file_handler = open_memstream(&stream_ctx->rcv_buffer, &stream_ctx->rcv_total_size);
-    stream_ctx->snd_offset = 0;
-    if (stream_ctx->file_handler < 0) {
+    if (stream_ctx->file_handler == NULL) {
         Log("failed to opem memstream");
         free(stream_ctx);
         return NULL;
@@ -719,7 +709,13 @@ void server_on_read(struct lsquic_stream* stream, lsquic_stream_ctx_t* stream_ct
     }
 
     fwrite(buf, 1, num_read, stream_data->file_handler);
-    Log("continue reading");
+    fflush(stream_data->file_handler);
+    Log("read %ld bytes", num_read);
+    Log("read: '%.*s'", num_read, stream_data->rcv_buffer);
+    stream_data->snd_total_size = stream_data->rcv_total_size;
+    stream_data->snd_buffer = stream_data->rcv_buffer;
+    lsquic_stream_wantread(stream, false);
+    lsquic_stream_wantwrite(stream, true);
     // TODO: callback to treat data
     // lsquic_stream_wantwrite(stream, 1);
     // TODO: write back when it is not a final response
@@ -731,20 +727,22 @@ void server_on_write(struct lsquic_stream* stream, lsquic_stream_ctx_t* stream_c
 {
     ssize_t num_written;
     lsquic_stream_id_t id = lsquic_stream_id(stream);
-    Log("Trying to write to Stream with id: %d", id);
-    num_written = lsquic_stream_write(stream, stream_ctx->snd_buffer, stream_ctx->snd_offset);
-    if (num_written > 0 && stream_ctx->snd_offset == stream_ctx->snd_total_size) {
-        Log("All data was written back, stopping stream");
-        lsquic_stream_close(stream);
-    } else if (num_written < 0) {
+    num_written = lsquic_stream_write(stream, stream_ctx->snd_buffer, stream_ctx->snd_total_size);
+    lsquic_stream_flush(stream);
+    if (num_written < 0) {
         Log("lsquic_stream_write() returned %ld, abort connection", (long)num_written);
         lsquic_conn_abort(lsquic_stream_conn(stream));
+    }
+    stream_ctx->snd_offset += num_written;
+    if (num_written >= 0 && stream_ctx->snd_offset == stream_ctx->snd_total_size) {
+        Log("All data was written back, stopping stream");
     }
 }
 
 void server_on_close(struct lsquic_stream* stream, lsquic_stream_ctx_t* stream_ctx)
 {
-    Log("%s called, cleaning stream context", __func__);
+    lsquic_stream_id_t id = lsquic_stream_id(stream);
+    Log("%s called, closing stream %u", __func__, id);
     free(stream_ctx->rcv_buffer); // TODO: not freeing snd_buffer because is echoing, change later
     free(stream_ctx);
 }
