@@ -1,1 +1,3 @@
 *.qlog
+# SSL Certificates
+certs
