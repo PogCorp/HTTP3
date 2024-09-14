@@ -107,10 +107,6 @@ bool new_server(
         return false;
     }
 
-    server->time_watcher.data = server;
-    ev_timer_init(&server->time_watcher, reset_timer, 0, 0);
-    ev_timer_start(server->event_loop, &server->time_watcher);
-
     return true;
 }
 
@@ -144,6 +140,24 @@ bool server_listen(Server* server)
         server_cleanup(server);
         return false;
     }
+
+    ok = set_ssl_ctx(server);
+    if (!ok) {
+        Log("failed to set ssl ctx");
+        return false;
+    }
+
+    server->quic_engine = lsquic_engine_new(LSENG_SERVER, &server->engine_api);
+    if (server->quic_engine == NULL) {
+        // TODO: select a more appropriate errno value here
+        errno = ENOPROTOOPT;
+        Log("engine could not be created");
+        return false;
+    }
+
+    server->time_watcher.data = server;
+    ev_timer_init(&server->time_watcher, reset_timer, 0, 0);
+    ev_timer_start(server->event_loop, &server->time_watcher);
 
     ev_run(server->event_loop, 0);
     server_cleanup(server);
@@ -247,17 +261,6 @@ struct packet_buffer* new_packet_buffer(int fd)
     packet_buf->peer_addresses = malloc(num_packets * sizeof(packet_buf->peer_addresses[0]));
     packet_buf->ecn = malloc(num_packets * sizeof(packet_buf->ecn[0]));
     packet_buf->packets = malloc(num_packets * sizeof(packet_buf->packets[0]));
-
-    for (unsigned int n = 0; n < num_packets; ++n) {
-        packet_buf->vecs[n].iov_base = packet_buf->buffer_data + MAX_PACKET_SIZE * n;
-        packet_buf->vecs[n].iov_len = MAX_PACKET_SIZE;
-        packet_buf->packets[n].msg_hdr.msg_name = &packet_buf->peer_addresses[n];
-        packet_buf->packets[n].msg_hdr.msg_namelen = sizeof(packet_buf->peer_addresses[n]);
-        packet_buf->packets[n].msg_hdr.msg_iov = &packet_buf->vecs[n];
-        packet_buf->packets[n].msg_hdr.msg_iovlen = 1,
-        packet_buf->packets[n].msg_hdr.msg_control = packet_buf->cmsg_data + CMSG_SIZE * n;
-        packet_buf->packets[n].msg_hdr.msg_controllen = CMSG_SIZE;
-    }
 
     return packet_buf;
 }
@@ -514,6 +517,17 @@ enum ReadStatus receive_packets(struct v_server* v_server, unsigned int* packets
     int response;
     int i;
 
+    for (unsigned int n = 0; n < buffer->packet_amount; ++n) {
+        buffer->vecs[n].iov_base = buffer->buffer_data + MAX_PACKET_SIZE * n;
+        buffer->vecs[n].iov_len = MAX_PACKET_SIZE;
+        buffer->packets[n].msg_hdr.msg_name = &buffer->peer_addresses[n];
+        buffer->packets[n].msg_hdr.msg_namelen = sizeof(buffer->peer_addresses[n]);
+        buffer->packets[n].msg_hdr.msg_iov = &buffer->vecs[n];
+        buffer->packets[n].msg_hdr.msg_iovlen = 1,
+        buffer->packets[n].msg_hdr.msg_control = buffer->cmsg_data + CMSG_SIZE * n;
+        buffer->packets[n].msg_hdr.msg_controllen = CMSG_SIZE;
+    }
+
     response = recvmmsg(v_server->socket_descriptor, buffer->packets, buffer->packet_amount, 0, NULL);
     if (response < 0) {
         if (!(EAGAIN == errno || EWOULDBLOCK == errno))
@@ -528,7 +542,7 @@ enum ReadStatus receive_packets(struct v_server* v_server, unsigned int* packets
         buffer->ecn[i] = 0;
         read_control_message(&buffer->packets[i].msg_hdr, local_address, &dropped_packets, &buffer->ecn[i]);
         v_server->dropped_packets = dropped_packets;
-        buffer->vecs[i].iov_len = buffer->packets->msg_len;
+        buffer->vecs[i].iov_len = buffer->packets[i].msg_len;
     }
     *packets_read = i;
     return i == buffer->packet_amount ? NO_ROOM : OK;
@@ -590,7 +604,7 @@ static SSL_CTX* server_get_ssl_ctx(void* peer_ctx,
     return ssl_ctx;
 }
 
-bool set_ssl_ctx(Server* server, const char* keylog_dir)
+bool set_ssl_ctx(Server* server)
 {
     server->ssl_ctx = SSL_CTX_new(TLS_method());
     if (!server->ssl_ctx) {
@@ -762,6 +776,7 @@ void reset_timer(EV_P_ ev_timer* timer, int revents)
 
 bool server_prepare(Server* server)
 {
+    char errbuf[0x100];
     if (keylog_dir) {
         struct lsquic_hash_elem* elem = lsquic_hash_first(server->certificates);
         for (; elem; elem = lsquic_hash_next(server->certificates)) {
@@ -780,6 +795,12 @@ bool server_prepare(Server* server)
     {
         ev_io_init(&v->socket_watcher, server_read_socket, v->socket_descriptor, EV_READ);
         ev_io_start(server->event_loop, &v->socket_watcher);
+    }
+
+    if (0 != lsquic_engine_check_settings(&server->quic_settings, LSENG_SERVER, errbuf, sizeof(errbuf))) {
+        errno = EINVAL;
+        Log("invalid settings passed: %s", errbuf);
+        return false;
     }
 
     return true;
