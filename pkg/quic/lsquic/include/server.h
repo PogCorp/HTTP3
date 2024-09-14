@@ -89,10 +89,8 @@ struct lsquic_stream_ctx {
     char* snd_buffer;
 
     lsquic_stream_t* stream;
-    struct v_server* v_server;
+    Server* server;
 };
-
-/* TODO: add Cgo callbacks */
 
 /*
  * Creates a new server for the provided parameters
@@ -100,12 +98,9 @@ struct lsquic_stream_ctx {
  * consumer must check errno to ensure that the configuration was appropriate
  * and server can listen
  * */
-bool new_server(
-    Server* server,
-    const char* keylog,
-    char** alpn_protos,
-    size_t* alpn_str_size,
-    int alpn_proto_len);
+bool new_server(Server* server, const char* keylog);
+
+void server_add_alpn(Server* server, char* const proto);
 
 void server_cleanup(Server* server);
 
@@ -129,7 +124,7 @@ void packet_buffer_cleanup(struct packet_buffer* buffer);
 bool v_server_configure_socket(struct v_server* v_server);
 
 /* Connection methods */
-static int server_write_socket(
+int server_write_socket(
     void* packets_out_ctx,
     const struct lsquic_out_spec* specs,
     unsigned count);
