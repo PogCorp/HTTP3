@@ -56,6 +56,9 @@ static bool validate_uri(char* uri, char** host, char** port_str)
         *port_str = "443";
     }
 
+    if (0 == regex_code)
+        regfree(&regex);
+
     return true;
 }
 

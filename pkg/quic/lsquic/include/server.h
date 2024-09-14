@@ -16,7 +16,7 @@
 #define NDROPPED_SIZE CMSG_SPACE(sizeof(uint32_t)) // get a platform independent size of ancillary field for dropped packets
 #define ECN_SIZE CMSG_SPACE(sizeof(int)) // get a platform independent size of ancillary field for ECN value
 #define IPV4_DST_MSG_SIZE sizeof(struct sockaddr_in) // size of ipv4 field contained in ancillary packets
-#define IPV6_DST_MSG_SIZE sizeof(struct sockaddr_in) // size of ipv6 field contained in ancillary packets
+#define IPV6_DST_MSG_SIZE sizeof(struct in6_pktinfo) // size of ipv6 field contained in ancillary packets
 // total size for ancillary. (just the sum of the previous)
 #define CMSG_SIZE (CMSG_SPACE(MAX(IPV4_DST_MSG_SIZE, IPV6_DST_MSG_SIZE) + NDROPPED_SIZE + ECN_SIZE))
 
@@ -39,7 +39,7 @@ TAILQ_HEAD(v_servers, v_server);
 typedef struct server {
     ev_timer time_watcher;
     struct ev_loop* event_loop;
-    SSL_CTX* ssl_ctx;
+    struct ssl_ctx_st* ssl_ctx;
     lsquic_engine_t* quic_engine;
     struct lsquic_engine_settings quic_settings;
     char alpn[ALPN_LEN];
