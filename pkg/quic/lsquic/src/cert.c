@@ -6,14 +6,6 @@
 #include "cert.h"
 #include "logger.h"
 
-// TODO: add the alpn setter in the server.c
-SSL_CTX* get_ssl_ctx(void* peer_ctx, const struct sockaddr* _)
-{
-    SSL_CTX* ssl_ctx = (SSL_CTX*)peer_ctx;
-    return ssl_ctx;
-}
-
-// TODO: arg must be set to the server alpn context
 int select_alpn_callback(SSL* ssl, const unsigned char** out,
     unsigned char* outlen, const unsigned char* in,
     unsigned int inlen, void* arg)
@@ -25,10 +17,8 @@ int select_alpn_callback(SSL* ssl, const unsigned char** out,
         (unsigned char*)alpn, strlen(alpn));
     if (response == OPENSSL_NPN_NEGOTIATED)
         return SSL_TLSEXT_ERR_OK;
-    else {
-        Log("no supported protocol could be selected for %s", (char*)in);
-        return SSL_TLSEXT_ERR_ALERT_FATAL;
-    }
+    Log("no supported protocol could be selected for %s", (char*)in);
+    return SSL_TLSEXT_ERR_ALERT_FATAL;
 }
 
 struct ssl_ctx_st* lookup_cert_callback(void* cert_ctx,
@@ -68,6 +58,7 @@ bool load_certificate(struct lsquic_hash* certs, const char* sni,
 
     cert = calloc(1, sizeof(*cert));
     cert->sni = strdup(sni);
+
     cert->ssl_ctx = SSL_CTX_new(TLS_method());
     if (!cert->ssl_ctx) {
         Log("at %s, SSL_CTX_new failed", __func__);

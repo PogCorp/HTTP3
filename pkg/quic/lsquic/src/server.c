@@ -32,7 +32,7 @@ static SSL_CTX* server_get_ssl_ctx(
     void* peer_ctx,
     const struct sockaddr* address);
 
-bool set_ssl_ctx(Server* server, const char* keylog_dir);
+bool set_ssl_ctx(Server* server);
 
 /* add ALPN value */
 static bool add_alpn(char* alpn, char* proto);
@@ -64,15 +64,12 @@ bool new_server(
     TAILQ_INIT(&server->v_servers);
 
     // registering callbacks and starting engine
-    char errbuf[0x100];
     lsquic_engine_init_settings(&server->quic_settings, LSENG_SERVER);
     server->quic_settings.es_ecn = LSQUIC_DF_ECN;
     if (alpn_protos && alpn_str_size && alpn_proto_len > 0)
         for (int i = 0; i < alpn_proto_len; i++) {
             int ver = lsquic_str2ver(alpn_protos[i], alpn_str_size[i]);
-            if (ver < 0) {
-                server->quic_settings.es_versions = 1 << LSQVER_I001;
-            } else {
+            if (ver >= 0) {
                 server->quic_settings.es_versions = 1 << ver;
             }
             add_alpn(server->alpn, alpn_protos[i]);
@@ -86,22 +83,14 @@ bool new_server(
     server->engine_api.ea_stream_if = &stream_interface;
     server->engine_api.ea_stream_if_ctx = server;
     server->engine_api.ea_settings = &server->quic_settings;
-    server->engine_api.ea_get_ssl_ctx = get_ssl_ctx;
 
     /* certificates */
     server->certificates = lsquic_hash_create();
     server->engine_api.ea_lookup_cert = lookup_cert_callback;
     server->engine_api.ea_cert_lu_ctx = server->certificates;
-    bool ok = set_ssl_ctx(server, keylog_dir);
-    if (!ok) {
-        Log("failed to set ssl ctx");
-        return false;
-    }
 
-    lsquic_global_init(LSQUIC_GLOBAL_SERVER);
-    if (0 != lsquic_engine_check_settings(&server->quic_settings, LSENG_SERVER, errbuf, sizeof(errbuf))) {
-        errno = EINVAL;
-        Log("invalid settings passed: %s", errbuf);
+    if (0 != lsquic_global_init(LSQUIC_GLOBAL_SERVER)) {
+        Log("Failed to initialize global context for LSQUIC");
         return false;
     }
 
