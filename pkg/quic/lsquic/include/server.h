@@ -74,31 +74,17 @@ struct packet_buffer {
     unsigned buffer_size;
 };
 
-struct lsquic_stream_ctx {
-    // total size of payload
-    size_t rcv_total_size;
-    // offset of written/read payload
-    off_t rcv_offset;
-    // payload data
-    char* rcv_buffer;
-    // used in conjunction to memstream to accumulate client data
-    FILE* file_handler;
-
-    size_t snd_total_size;
-    off_t snd_offset;
-    char* snd_buffer;
-
-    lsquic_stream_t* stream;
-    Server* server;
-};
-
 /*
  * Creates a new server for the provided parameters
  *
  * consumer must check errno to ensure that the configuration was appropriate
  * and server can listen
  * */
-bool new_server(Server* server, const char* keylog);
+bool new_server(
+    Server* server,
+    const char* keylog,
+    const struct lsquic_stream_if* stream_if,
+    void* stream_if_ctx);
 
 void server_add_alpn(Server* server, char* const proto);
 
@@ -130,33 +116,3 @@ int server_write_socket(
     unsigned count);
 
 void server_read_socket(EV_P_ ev_io* w, int revents);
-
-/* LSQUIC Callbacks */
-
-/*
- * Callback to process the event of a new connection to the server
- * */
-lsquic_conn_ctx_t* server_on_new_connection(
-    void* stream_if_ctx,
-    struct lsquic_conn* conn);
-
-/*
- * Callback to process the event of a closed connection to the server
- * */
-void server_on_closed_connection(lsquic_conn_t* conn);
-
-lsquic_stream_ctx_t* server_on_new_stream(
-    void* stream_if_ctx,
-    struct lsquic_stream* stream);
-
-void server_on_read(
-    struct lsquic_stream* stream,
-    lsquic_stream_ctx_t* stream_ctx);
-
-void server_on_write(
-    struct lsquic_stream* stream,
-    lsquic_stream_ctx_t* stream_ctx);
-
-void server_on_close(
-    struct lsquic_stream* stream,
-    lsquic_stream_ctx_t* stream_ctx);
