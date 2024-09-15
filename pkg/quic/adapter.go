@@ -1,10 +1,25 @@
 package adapter
 
-type QuicAdapter interface {
-	onNewConnection(id []byte)
-	onNewStream(id int64)
-	onCanceledConn(id []byte)
-	onReadStream(id int64, data []byte)
-	writeStream(id int64, data []byte)
-	Listen()
+import (
+	"fmt"
+	"io"
+)
+
+type QuicServer interface {
+	Listen() error
+}
+
+type QuicAPI interface {
+	OnNewConnection(cid QuicCID)
+	OnCanceledConn(cid QuicCID)
+	OnNewStream(stream QuicStream)
+	OnReadStream(stream QuicStream, data []byte)
+}
+
+type QuicStream interface {
+	io.WriteCloser
+}
+
+type QuicCID interface {
+	fmt.Stringer
 }
