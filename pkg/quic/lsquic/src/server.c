@@ -18,8 +18,6 @@
 #include "logger.h"
 #include "lsquic.h"
 #include "lsquic_hash.h"
-#include "lsquic_int_types.h"
-#include "lsquic_util.h"
 #include "server.h"
 
 /* process ticker */
@@ -40,19 +38,12 @@ static bool add_alpn(char* alpn, char* proto);
 void handle_send_failure(Server* server, int fd);
 void schedule_resend(EV_P_ ev_io* ev_write, int revents);
 
-static const struct lsquic_stream_if stream_interface = {
-    .on_new_conn = server_on_new_connection,
-    .on_conn_closed = server_on_closed_connection,
-    .on_new_stream = server_on_new_stream,
-    .on_read = server_on_read,
-    .on_write = server_on_write,
-    .on_close = server_on_close,
-};
-
 // NOTE: There should be a wrapper func to GO here
 bool new_server(
     Server* server,
-    const char* keylog)
+    const char* keylog,
+    const struct lsquic_stream_if* stream_if,
+    void* stream_if_ctx)
 {
     // initialize every field with default 0
     memset(server, 0, sizeof(Server));
@@ -67,8 +58,8 @@ bool new_server(
     server->engine_api.ea_packets_out = server_write_socket;
     server->engine_api.ea_packets_out_ctx = server;
     server->engine_api.ea_get_ssl_ctx = server_get_ssl_ctx;
-    server->engine_api.ea_stream_if = &stream_interface;
-    server->engine_api.ea_stream_if_ctx = server;
+    server->engine_api.ea_stream_if = stream_if;
+    server->engine_api.ea_stream_if_ctx = stream_if_ctx;
     server->engine_api.ea_settings = &server->quic_settings;
 
     /* certificates */
@@ -614,137 +605,6 @@ bool set_ssl_ctx(Server* server)
 
     // TODO: look for certificate resumption
     return true;
-}
-
-/* stream methods */
-
-void print_conn_info(const lsquic_conn_t* conn)
-{
-    const char* cipher;
-
-    cipher = lsquic_conn_crypto_cipher(conn);
-
-    Log("Connection info: version: %u; cipher: %s; key size: %d, alg key size: %d",
-        lsquic_conn_quic_version(conn),
-        cipher ? cipher : "<null>",
-        lsquic_conn_crypto_keysize(conn),
-        lsquic_conn_crypto_alg_keysize(conn));
-}
-
-lsquic_conn_ctx_t* server_on_new_connection(
-    void* stream_if_ctx,
-    struct lsquic_conn* conn)
-{
-    const lsquic_cid_t* cid = lsquic_conn_id(conn);
-    char cid_string[0x29];
-    lsquic_hexstr(cid->idbuf, cid->len, cid_string, sizeof(cid_string));
-    const char* sni = lsquic_conn_get_sni(conn);
-    Log("new connection %s, for sni: %s", cid_string, sni ? sni : "not set");
-    print_conn_info(conn);
-    return NULL;
-}
-
-void server_on_closed_connection(lsquic_conn_t* conn)
-{
-    const lsquic_cid_t* cid = lsquic_conn_id(conn);
-    char cid_string[0x29];
-    lsquic_hexstr(cid->idbuf, cid->len, cid_string, sizeof(cid_string));
-    Log("Connection %s closed", cid_string);
-}
-
-lsquic_stream_ctx_t* server_on_new_stream(
-    void* stream_if_ctx,
-    struct lsquic_stream* stream)
-{
-    lsquic_stream_id_t id = lsquic_stream_id(stream);
-    Log("New Stream with id: %d", id);
-    lsquic_stream_ctx_t* stream_ctx = calloc(1, sizeof(*stream_ctx));
-    stream_ctx->stream = stream;
-    stream_ctx->server = stream_if_ctx;
-    stream_ctx->file_handler = open_memstream(&stream_ctx->rcv_buffer, &stream_ctx->rcv_total_size);
-    if (stream_ctx->file_handler == NULL) {
-        Log("failed to opem memstream");
-        free(stream_ctx);
-        return NULL;
-    }
-    lsquic_stream_wantread(stream, true);
-    return stream_ctx;
-}
-
-void server_on_read(struct lsquic_stream* stream, lsquic_stream_ctx_t* stream_ctx)
-{
-    struct lsquic_stream_ctx* const stream_data = (void*)stream_ctx;
-    ssize_t num_read;
-    unsigned char buf[0x400];
-
-    if (stream_ctx == NULL) {
-        Log("in %s: received NULL context", __func__);
-        lsquic_stream_close(stream);
-        return;
-    }
-
-    lsquic_stream_id_t id = lsquic_stream_id(stream);
-    Log("Trying to read from Stream with id: %d", id);
-    num_read = lsquic_stream_read(stream, buf, sizeof(buf));
-
-    if (num_read == 0) {
-        // TODO: adding null termination, (only for tests, remove later)
-        fwrite("", 1, 1, stream_data->file_handler);
-        fclose(stream_data->file_handler);
-        Log("read EOF, data received %s");
-        // NOTE: (all data read) complete request and relay response, then shutdown stream
-        lsquic_stream_shutdown(stream, SHUT_RD);
-        if (stream_data->rcv_total_size) {
-            // TODO: this is only for echoing, change later
-            stream_data->snd_total_size = stream_data->rcv_total_size;
-            stream_data->snd_buffer = stream_data->rcv_buffer;
-            lsquic_stream_wantwrite(stream, true);
-        }
-    }
-
-    if (num_read < 0) {
-        /* This should not happen */
-        Log("error reading from stream (errno: %d) -- abort connection", errno);
-        lsquic_conn_abort(lsquic_stream_conn(stream));
-    }
-
-    fwrite(buf, 1, num_read, stream_data->file_handler);
-    fflush(stream_data->file_handler);
-    Log("read %ld bytes", num_read);
-    Log("read: '%.*s'", num_read, stream_data->rcv_buffer);
-    stream_data->snd_total_size = stream_data->rcv_total_size;
-    stream_data->snd_buffer = stream_data->rcv_buffer;
-    lsquic_stream_wantread(stream, false);
-    lsquic_stream_wantwrite(stream, true);
-    // TODO: callback to treat data
-    // lsquic_stream_wantwrite(stream, 1);
-    // TODO: write back when it is not a final response
-    return;
-}
-
-// TODO: this is only an echo test, change later
-void server_on_write(struct lsquic_stream* stream, lsquic_stream_ctx_t* stream_ctx)
-{
-    ssize_t num_written;
-    lsquic_stream_id_t id = lsquic_stream_id(stream);
-    num_written = lsquic_stream_write(stream, stream_ctx->snd_buffer, stream_ctx->snd_total_size);
-    lsquic_stream_flush(stream);
-    if (num_written < 0) {
-        Log("lsquic_stream_write() returned %ld, abort connection", (long)num_written);
-        lsquic_conn_abort(lsquic_stream_conn(stream));
-    }
-    stream_ctx->snd_offset += num_written;
-    if (num_written >= 0 && stream_ctx->snd_offset == stream_ctx->snd_total_size) {
-        Log("All data was written back, stopping stream");
-    }
-}
-
-void server_on_close(struct lsquic_stream* stream, lsquic_stream_ctx_t* stream_ctx)
-{
-    lsquic_stream_id_t id = lsquic_stream_id(stream);
-    Log("%s called, closing stream %u", __func__, id);
-    free(stream_ctx->rcv_buffer); // TODO: not freeing snd_buffer because is echoing, change later
-    free(stream_ctx);
 }
 
 void process_ticker(Server* server)
