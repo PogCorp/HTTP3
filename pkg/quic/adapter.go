@@ -14,6 +14,7 @@ type QuicAPI interface {
 	OnCanceledConn(cid QuicCID)
 	OnNewStream(stream QuicStream)
 	OnReadStream(stream QuicStream, data []byte)
+	OnWriteStream(stream QuicStream)
 }
 
 type QuicStream interface {

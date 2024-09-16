@@ -148,7 +148,6 @@ bool server_listen(Server* server)
     return true;
 }
 
-// TODO: improvement, pass the size of proto as parameter
 /*
  * Format used for ALPN
  * ┌───┬───┬───┬──────┐

@@ -32,7 +32,7 @@ type LsQuicServer struct {
 func (l *LsQuicServer) Listen() error {
 	_, err := C.server_listen(l.lsServer)
 	if err != nil {
-		return errors.New(fmt.Sprintf("got error while trying to listen, errno: %s", err))
+		return fmt.Errorf("got error while trying to listen, errno: %s", err)
 	}
 	return nil
 }
@@ -69,10 +69,10 @@ func NewLsquicServer(uri, keyfile, certfile string, api adapter.QuicAPI) (adapte
 }
 
 // export adapterOnNewConnection
-func adapterOnNewConnection(conn *C.lsquic_conn_t, streamCtx unsafe.Pointer) *C.lsquic_conn_ctx_t {
+func adapterOnNewConnection(conn *C.lsquic_conn_t, streamIfCtx unsafe.Pointer) *C.lsquic_conn_ctx_t {
 	sni := C.lsquic_conn_get_sni(conn)
 	goSni := C.GoString(sni)
-	server, ok := gopointer.Restore(streamCtx).(LsQuicServer)
+	server, ok := gopointer.Restore(streamIfCtx).(LsQuicServer)
 	if !ok {
 		panic("passed on the incorrect type")
 	}
@@ -80,7 +80,7 @@ func adapterOnNewConnection(conn *C.lsquic_conn_t, streamCtx unsafe.Pointer) *C.
 	server.quicApi.OnNewConnection(lsQuicCid)
 	log.Printf("on sni: %s\n", goSni)
 	connCtx := (*C.lsquic_conn_ctx_t)(C.malloc(C.sizeof_lsquic_conn_ctx_t))
-	connCtx.adapter_ctx = streamCtx
+	connCtx.adapter_ctx = streamIfCtx
 	return connCtx
 }
 
@@ -97,11 +97,19 @@ func adapterOnClosedConnection(conn *C.lsquic_conn_t) {
 
 // export adapterOnNewStream
 func adapterOnNewStream(stream *C.lsquic_stream_t, streamCtx unsafe.Pointer) *C.lsquic_stream_ctx_t {
+	id := C.lsquic_stream_id(stream)
+	log.Printf("new stream with id: #%d\n", uint64(id))
 	streamCtxOut := (*C.lsquic_stream_ctx_t)(C.malloc(C.sizeof_lsquic_stream_ctx_t))
 	streamCtxOut.adapter_ctx = streamCtx
 	streamCtxOut.send_buffer = nil
 	streamCtxOut.send_buffer_size = 0
+	streamCtxOut.send_buffer_off = 0
 	return streamCtxOut
+
+}
+
+// export adapterOnWrite
+func adapterOnWrite(stream *C.lsquic_stream_t, adapter_ctx unsafe.Pointer) {
 
 }
 
@@ -111,6 +119,8 @@ func adapterOnRead(stream *C.lsquic_stream_t, buf *C.char, buf_size C.size_t, ad
 }
 
 // export adapterOnClose
-func adapterOnClose(stream *C.lsquic_stream_t, adapter_cxt unsafe.Pointer) {
-
+func adapterOnClose(stream *C.lsquic_stream_t, streamCtx *C.lsquic_stream_ctx_t) {
+	id := C.lsquic_stream_id(stream)
+	log.Printf("closing stream with id: #%d\n", uint64(id))
+	C.free(unsafe.Pointer(streamCtx))
 }
