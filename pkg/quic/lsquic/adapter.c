@@ -5,8 +5,6 @@
 
 #include "logger.h"
 #include "lsquic.h"
-#include "lsquic_int_types.h"
-#include "lsquic_util.h"
 
 struct lsquic_conn_ctx {
     void* adapter_ctx;
@@ -15,16 +13,17 @@ struct lsquic_conn_ctx {
 struct lsquic_stream_ctx {
     char* send_buffer;
     size_t send_buffer_size;
+    off_t send_buffer_off;
     void* adapter_ctx;
 };
 
 /* Adapter Callbacks */
-extern lsquic_stream_ctx_t* adapterOnNewConnection(lsquic_conn_t* conn, void* stream_if_ctx);
+extern lsquic_conn_ctx_t* adapterOnNewConnection(lsquic_conn_t* conn, void* stream_if_ctx);
 extern void adapterOnClosedConnection(lsquic_conn_t* conn);
-extern void adapterOnNewStream(lsquic_stream_t* stream, void* adapter_ctx);
-extern void adapterOnRead(lsquic_stream_t* stream, char* buf, size_t buf_size,
-    void* adapter_ctx);
-extern void adapterOnClose(lsquic_stream_t* stream, void* adapter_ctx);
+extern lsquic_stream_ctx_t* adapterOnNewStream(lsquic_stream_t* stream, void* adapter_ctx);
+extern void adapterOnRead(lsquic_stream_t* stream, char* buf, size_t buf_size, void* adapter_ctx);
+extern void adapterOnWrite(lsquic_stream_t* stream, void* adapter_ctx);
+extern void adapterOnClose(lsquic_stream_t* stream, lsquic_stream_ctx_t* stream_ctx);
 
 /**/
 
@@ -79,31 +78,21 @@ void print_conn_info(const lsquic_conn_t* conn)
 lsquic_conn_ctx_t* server_on_new_connection(void* stream_if_ctx,
     struct lsquic_conn* conn)
 {
-    const lsquic_cid_t* cid = lsquic_conn_id(conn);
-    char cid_string[0x29];
-    lsquic_hexstr(cid->idbuf, cid->len, cid_string, sizeof(cid_string));
     const char* sni = lsquic_conn_get_sni(conn);
-    Log("new connection %s, for sni: %s", cid_string, sni ? sni : "not set");
-    print_conn_info(conn);
-    return NULL;
+    Log("got new connection for sni: %s", sni ? sni : "not set");
+    return adapterOnNewConnection(conn, stream_if_ctx);
 }
 
 void server_on_closed_connection(lsquic_conn_t* conn)
 {
-    const lsquic_cid_t* cid = lsquic_conn_id(conn);
-    char cid_string[0x29];
-    lsquic_hexstr(cid->idbuf, cid->len, cid_string, sizeof(cid_string));
-    Log("Connection %s closed", cid_string);
+    adapterOnClosedConnection(conn);
 }
 
 lsquic_stream_ctx_t* server_on_new_stream(void* stream_if_ctx,
     struct lsquic_stream* stream)
 {
-    lsquic_stream_id_t id = lsquic_stream_id(stream);
-    Log("New Stream with id: %d", id);
-    lsquic_stream_ctx_t* stream_ctx = calloc(1, sizeof(*stream_ctx));
-    lsquic_stream_wantread(stream, true);
-    return stream_ctx;
+    lsquic_stream_ctx_t* stream_ctx = stream_if_ctx;
+    return adapterOnNewStream(stream, stream_ctx->adapter_ctx);
 }
 
 void server_on_read(struct lsquic_stream* stream,
@@ -142,8 +131,7 @@ void server_on_write(struct lsquic_stream* stream,
 {
     ssize_t num_written;
     lsquic_stream_id_t id = lsquic_stream_id(stream);
-    unsigned char buf[0x400];
-    num_written = lsquic_stream_write(stream, buf, sizeof(buf));
+    num_written = lsquic_stream_write(stream, stream_ctx->send_buffer, stream_ctx->send_buffer_size);
     lsquic_stream_flush(stream);
     if (num_written < 0) {
         Log("lsquic_stream_write() returned %ld, abort connection",
@@ -158,5 +146,5 @@ void server_on_close(struct lsquic_stream* stream,
 {
     lsquic_stream_id_t id = lsquic_stream_id(stream);
     Log("%s called, closing stream %u", __func__, id);
-    free(stream_ctx);
+    adapterOnClose(stream, stream_ctx);
 }
