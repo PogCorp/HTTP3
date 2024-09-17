@@ -22,9 +22,9 @@ IF(BUILD_LSQUIC)
     INCLUDE_DIRECTORIES(lsquic/include)
     INCLUDE_DIRECTORIES(lsquic/src/liblsquic)
     INCLUDE_DIRECTORIES(include)
-    ADD_LIBRARY(lsquic_adapter SHARED ./src/logger.c ./src/cert.c ./src/server.c ./src/keylog.c ./src/ancillary.c)
+    ADD_LIBRARY(adapter SHARED ./src/logger.c ./src/cert.c ./src/server.c ./src/keylog.c ./src/ancillary.c)
     SET(LIBS
-        lsquic_adapter
+        adapter
         ${CMAKE_SOURCE_DIR}/lsquic/src/liblsquic/liblsquic.so
         ${CMAKE_SOURCE_DIR}/boringssl/crypto/libcrypto.so
         ${CMAKE_SOURCE_DIR}/boringssl/ssl/libssl.so z ev m)
