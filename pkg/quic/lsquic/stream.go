@@ -2,14 +2,16 @@ package lsquic
 
 /*
 #cgo CFLAGS: -I ./boringssl/include -I ./include -I ./lsquic/include -I ./lsquic/src/liblsquic
-#cgo LDFLAGS: -L . -L ./boringssl/ssl -L ./boringssl/crypto -L ./lsquic/src/liblsquic -l ev -l m -l z -l lsquic -l lsquic_adapter -l crypto -l ssl
-#include "lsquic.h"
+#cgo LDFLAGS: -L${SRCDIR}/. -ladapter -L${SRCDIR}/boringssl/ssl -lssl -L${SRCDIR}/boringssl/crypto -lcrypto -L${SRCDIR}/lsquic/src/liblsquic -llsquic -lev -lm -lz
 #include <stdlib.h>
 #include <stdbool.h>
+#include "lsquic.h"
+#include "adapter.h"
 */
 import "C"
 import (
 	"fmt"
+	adapter "poghttp3/pkg/quic"
 	"unsafe"
 )
 
@@ -37,4 +39,18 @@ func (l *LsQuicStream) Write(p []byte) (n int, err error) {
 	*l.sendBuffer = (*C.char)(C.CBytes(p))
 	C.lsquic_stream_wantwrite(l.lsStream, C.true)
 	return len(p), nil
+}
+
+func (l *LsQuicStream) ID() uint64 {
+	id := C.lsquic_stream_id(l.lsStream)
+	return uint64(id)
+}
+
+func NewLsQuicStream(lsStream *C.lsquic_stream_t, streamCtx *C.lsquic_stream_ctx_t) adapter.QuicStream {
+	return &LsQuicStream{
+		lsStream:       lsStream,
+		sendBuffer:     &streamCtx.send_buffer,
+		sendBufferSize: &streamCtx.send_buffer_size,
+		sendBufferOff:  &streamCtx.send_buffer_off,
+	}
 }
