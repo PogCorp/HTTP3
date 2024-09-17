@@ -19,6 +19,7 @@ type QuicAPI interface {
 
 type QuicStream interface {
 	io.WriteCloser
+	ID() uint64
 }
 
 type QuicCID interface {
