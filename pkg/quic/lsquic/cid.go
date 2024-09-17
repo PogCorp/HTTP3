@@ -2,7 +2,7 @@ package lsquic
 
 /*
 #cgo CFLAGS: -I ./boringssl/include -I ./include -I ./lsquic/include -I ./lsquic/src/liblsquic
-#cgo LDFLAGS: -L . -L ./boringssl/ssl -L ./boringssl/crypto -L ./lsquic/src/liblsquic -l ev -l m -l z -l lsquic -l lsquic_adapter -l crypto -l ssl
+#cgo LDFLAGS: -L${SRCDIR}/. -ladapter -L${SRCDIR}/boringssl/ssl -lssl -L${SRCDIR}/boringssl/crypto -lcrypto -L${SRCDIR}/lsquic/src/liblsquic -llsquic -lev -lm -lz
 #include "lsquic_int_types.h"
 #include "lsquic_util.h"
 #include "lsquic.h"
