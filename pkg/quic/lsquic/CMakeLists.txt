@@ -24,12 +24,12 @@ IF(BUILD_LSQUIC)
     INCLUDE_DIRECTORIES(include)
     ADD_LIBRARY(adapter SHARED ./src/logger.c ./src/cert.c ./src/server.c ./src/keylog.c ./src/ancillary.c)
     SET(LIBS
-        adapter
-        ${CMAKE_SOURCE_DIR}/lsquic/src/liblsquic/liblsquic.so
-        ${CMAKE_SOURCE_DIR}/boringssl/crypto/libcrypto.so
-        ${CMAKE_SOURCE_DIR}/boringssl/ssl/libssl.so z ev m)
+        ${CMAKE_SOURCE_DIR}/liblsquic.so
+        ${CMAKE_SOURCE_DIR}/libcrypto.so
+        ${CMAKE_SOURCE_DIR}/libssl.so z ev m)
+    target_link_libraries(adapter ${LIBS})
     add_executable(echo_test.out cmd/echo_test.c)
-    target_link_libraries(echo_test.out ${LIBS})
+    target_link_libraries(echo_test.out ${LIBS} adapter)
 ENDIF()
 
 MESSAGE(STATUS "Compiler flags: ${CMAKE_C_FLAGS}")
