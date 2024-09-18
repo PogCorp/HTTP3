@@ -53,8 +53,7 @@ void server_on_closed_connection(lsquic_conn_t* conn)
 lsquic_stream_ctx_t* server_on_new_stream(void* stream_if_ctx,
     struct lsquic_stream* stream)
 {
-    lsquic_stream_ctx_t* stream_ctx = stream_if_ctx;
-    return adapterOnNewStream(stream, stream_ctx->adapter_ctx);
+    return adapterOnNewStream(stream, stream_if_ctx);
 }
 
 void server_on_read(struct lsquic_stream* stream,

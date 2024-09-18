@@ -2,7 +2,7 @@ package lsquic
 
 /*
 #cgo CFLAGS: -I ./boringssl/include -I ./include -I ./lsquic/include -I ./lsquic/src/liblsquic
-#cgo LDFLAGS: -L${SRCDIR}/. -ladapter -L${SRCDIR}/boringssl/ssl -lssl -L${SRCDIR}/boringssl/crypto -lcrypto -L${SRCDIR}/lsquic/src/liblsquic -llsquic -lev -lm -lz
+#cgo LDFLAGS: -L${SRCDIR}/. -lev -lm -lz -lssl -lcrypto -llsquic -ladapter
 #include <stdlib.h>
 #include <stdbool.h>
 #include "lsquic.h"
@@ -32,7 +32,7 @@ func (l *LsQuicStream) Close() error {
 
 func (l *LsQuicStream) Write(p []byte) (n int, err error) {
 	if *l.sendBuffer != nil {
-		C.free(unsafe.Pointer(l.sendBuffer))
+		C.free(unsafe.Pointer(*l.sendBuffer))
 	}
 	*l.sendBufferSize = (C.size_t)(len(p))
 	*l.sendBufferOff = 0
