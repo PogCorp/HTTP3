@@ -16,3 +16,5 @@ cd $LSQUIC
 echo "Building lsquic:"
 cmake -DCMAKE_CXX_COMPILER=g++-9 -DCMAKE_C_COMPILER=gcc-9 -DCMAKE_CXX_FLAGS="-Wno-ignored-attributes" -DLSQUIC_SHARED_LIB=1 -DBORINGSSL_DIR=${BORINGSSL} . && make
 cd $ROOTDIR
+cp ./boringssl/crypto/libcrypto.so ./boringssl/ssl/libssl.so ./lsquic/src/liblsquic/liblsquic.so $ROOTDIR
+export LD_LIBRARY_PATH=${pwd}
