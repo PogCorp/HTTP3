@@ -2,7 +2,7 @@ package lsquic
 
 /*
 #cgo CFLAGS: -I ./boringssl/include -I ./include -I ./lsquic/include -I ./lsquic/src/liblsquic
-#cgo LDFLAGS: -L${SRCDIR}/. -ladapter -L${SRCDIR}/boringssl/ssl -lssl -L${SRCDIR}/boringssl/crypto -lcrypto -L${SRCDIR}/lsquic/src/liblsquic -llsquic -lev -lm -lz
+#cgo LDFLAGS: -L${SRCDIR}/. -lev -lm -lz -lssl -lcrypto -llsquic -ladapter
 #include "lsquic_int_types.h"
 #include "lsquic_util.h"
 #include "lsquic.h"
@@ -59,15 +59,16 @@ func NewLsquicServer(uri, keyfile, certfile string, api adapter.QuicAPI) (adapte
 		lsServer: (*C.Server)(C.malloc(C.sizeof_Server)),
 		quicApi:  api,
 	}
-	streamCtx := gopointer.Save(server)
+	streamIfCtx := gopointer.Save(server)
 	cUri := C.CString(uri)
 	defer C.free(unsafe.Pointer(cUri))
 	cKeyfile := C.CString(keyfile)
 	defer C.free(unsafe.Pointer(cKeyfile))
 	cCertfile := C.CString(certfile)
 	defer C.free(unsafe.Pointer(cCertfile))
+	C.set_logger_fd(C.stdout)
 
-	ok, err := C.lsquic_new_server(server.lsServer, nil, streamCtx)
+	ok, err := C.lsquic_new_server(server.lsServer, nil, streamIfCtx)
 	if !ok || err != nil {
 		return nil, errors.New("unable to create new server")
 	}
@@ -110,17 +111,19 @@ func adapterOnClosedConnection(conn *C.lsquic_conn_t) {
 		panic("passed on the incorrect type")
 	}
 	server.quicApi.OnCanceledConn(lsQuicCid)
+	C.lsquic_conn_set_ctx(conn, nil)
 }
 
 //export adapterOnNewStream
-func adapterOnNewStream(stream *C.lsquic_stream_t, streamCtx unsafe.Pointer) *C.lsquic_stream_ctx_t {
+func adapterOnNewStream(stream *C.lsquic_stream_t, streamIfCtx unsafe.Pointer) *C.lsquic_stream_ctx_t {
 	id := C.lsquic_stream_id(stream)
 	log.Printf("new stream with id: #%d\n", uint64(id))
 	streamCtxOut := (*C.lsquic_stream_ctx_t)(C.malloc(C.sizeof_lsquic_stream_ctx_t))
-	streamCtxOut.adapter_ctx = streamCtx
+	streamCtxOut.adapter_ctx = streamIfCtx
 	streamCtxOut.send_buffer = nil
 	streamCtxOut.send_buffer_size = 0
 	streamCtxOut.send_buffer_off = 0
+	C.lsquic_stream_wantread(stream, C.true)
 	return streamCtxOut
 
 }
@@ -131,14 +134,16 @@ func adapterOnWrite(stream *C.lsquic_stream_t, streamCtx *C.lsquic_stream_ctx_t)
 	C.lsquic_stream_flush(stream)
 	if numWritten < 0 {
 		log.Println("failed to write to stream")
+		return
 	}
+	streamCtx.send_buffer_off += numWritten
 	server, ok := gopointer.Restore(streamCtx.adapter_ctx).(LsQuicServer)
 	if !ok {
 		panic("passed on the incorrect type")
 	}
 	lsStream := NewLsQuicStream(stream, streamCtx)
 	server.quicApi.OnWriteStream(lsStream)
-	C.lsquic_stream_wantread(stream, C.true)
+	C.lsquic_stream_wantread(stream, C.false)
 	C.lsquic_stream_wantwrite(stream, C.false)
 }
 
@@ -155,7 +160,9 @@ func adapterOnRead(stream *C.lsquic_stream_t, buf *C.char, bufSize C.size_t, str
 		log.Println("failure in reading stream, aborting connection")
 		C.lsquic_conn_abort(C.lsquic_stream_conn(stream))
 	}
-	_, err := lsStream.Write(C.GoBytes(unsafe.Pointer(buf), C.int(bufSize)))
+	rcvBuf := C.GoBytes(unsafe.Pointer(buf), C.int(numRead))
+	log.Printf("received: '%s'\n", string(rcvBuf))
+	_, err := lsStream.Write(rcvBuf)
 	if err != nil {
 		log.Println("failed to write bytes")
 		return
