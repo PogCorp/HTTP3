@@ -160,7 +160,7 @@ func adapterOnRead(stream *C.lsquic_stream_t, buf *C.char, bufSize C.size_t, str
 		log.Println("failure in reading stream, aborting connection")
 		C.lsquic_conn_abort(C.lsquic_stream_conn(stream))
 	}
-	rcvBuf := C.GoBytes(unsafe.Pointer(buf), C.int(numRead))
+	rcvBuf := unsafe.Slice((*byte)(unsafe.Pointer(buf)), numRead)
 	log.Printf("received: '%s'\n", string(rcvBuf))
 	_, err := lsStream.Write(rcvBuf)
 	if err != nil {
