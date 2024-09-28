@@ -2,8 +2,8 @@ package main
 
 import (
 	"encoding/binary"
-	"fmt"
 	"errors"
+	"fmt"
 	"io"
 )
 
@@ -19,14 +19,12 @@ func NewFrameParser(r io.Reader) *FrameParser {
 	}
 }
 
-
-// ParseFrames lê continuamente os dados da stream e decodifica múltiplos frames.
+// read stream and parse multiple frames
 func (p *FrameParser) ParseFrames() error {
 	for {
-		// Lê o tipo do frame (o primeiro byte)
+		// read the frame type (the first byte)
 		var frameType uint8
 		if err := binary.Read(p.reader, binary.BigEndian, &frameType); err != nil {
-			// Se o erro for EOF (fim dos dados), encerramos o loop sem erro
 			if errors.Is(err, io.EOF) {
 				fmt.Println("Fim dos dados.")
 				return nil
@@ -34,19 +32,19 @@ func (p *FrameParser) ParseFrames() error {
 			return fmt.Errorf("erro ao ler tipo do frame: %w", err)
 		}
 
-		// Lê o campo de comprimento (varint ou uint dependendo do protocolo)
+		// read the length field
 		length, err := p.readFrameLength()
 		if err != nil {
 			return fmt.Errorf("erro ao ler comprimento do frame: %w", err)
 		}
 
-		// Lê o payload do frame com base no comprimento
+		// read the payload according to its length
 		payload := make([]byte, length)
 		if _, err := io.ReadFull(p.reader, payload); err != nil {
 			return fmt.Errorf("erro ao ler payload do frame: %w", err)
 		}
 
-		// Processa o frame conforme o tipo
+		// parse frame according to it's type
 		switch frameType {
 		case FrameTypeHeaders:
 			headersFrame := &HeadersFrame{}
@@ -75,9 +73,7 @@ func (p *FrameParser) ParseFrames() error {
 	}
 }
 
-// Função auxiliar para ler o comprimento do frame
 func (p *FrameParser) readFrameLength() (uint64, error) {
-	// Aqui estamos assumindo que o comprimento do frame está armazenado em 2 bytes (ajuste conforme o protocolo)
 	var length uint16
 	if err := binary.Read(p.reader, binary.BigEndian, &length); err != nil {
 		return 0, err
