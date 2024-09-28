@@ -7,39 +7,39 @@ import (
 )
 
 func main() {
-	// Teste de codificação e decodificação de HEADERS frame
+	// test encoding and decoding from HEADERS frame
 	fmt.Println("Testando HEADERS Frame...")
 	testHeadersFrame()
 
-	// Teste de codificação e decodificação de DATA frame
+	// test encoding and decoding from DATA frame
 	fmt.Println("Testando DATA Frame...")
 	testDataFrame()
 
-	// Teste de codificação e decodificação de SETTINGS frame
+	// test encoding and decoding from SETTINGS frame
 	fmt.Println("Testando SETTINGS Frame...")
 	testSettingsFrame()
 }
 
 func testHeadersFrame() {
-	// Cria um HeadersFrame de exemplo
+	// create a HeadersFrame
 	originalFrame := &HeadersFrame{
 		Headers: []byte("example-headers"),
 	}
 
-	// Codifica o frame
+	// encode frame
 	encodedData, err := originalFrame.Encode()
 	if err != nil {
 		log.Fatalf("Erro ao codificar HeadersFrame: %v", err)
 	}
 
-	// Decodifica o frame
+	// decode frame
 	decodedFrame := &HeadersFrame{}
 	err = decodedFrame.Decode(encodedData)
 	if err != nil {
 		log.Fatalf("Erro ao decodificar HeadersFrame: %v", err)
 	}
 
-	// Verifica se os dados foram preservados
+	// verify header preservation
 	if !bytes.Equal(originalFrame.Headers, decodedFrame.Headers) {
 		fmt.Printf("Erro: Headers não correspondem.\nOriginal: %v\nDecodificado: %v\n", originalFrame.Headers, decodedFrame.Headers)
 	} else {
@@ -48,25 +48,25 @@ func testHeadersFrame() {
 }
 
 func testDataFrame() {
-	// Cria um DataFrame de exemplo
+	// create a DataFrame
 	originalFrame := &DataFrame{
 		Data: []byte("example-data"),
 	}
 
-	// Codifica o frame
+	// encode frame
 	encodedData, err := originalFrame.Encode()
 	if err != nil {
 		log.Fatalf("Erro ao codificar DataFrame: %v", err)
 	}
 
-	// Decodifica o frame
+	// decode frame
 	decodedFrame := &DataFrame{}
 	err = decodedFrame.Decode(encodedData)
 	if err != nil {
 		log.Fatalf("Erro ao decodificar DataFrame: %v", err)
 	}
 
-	// Verifica se os dados foram preservados
+	// verify if data was preserved
 	if !bytes.Equal(originalFrame.Data, decodedFrame.Data) {
 		fmt.Printf("Erro: Data não corresponde.\nOriginal: %v\nDecodificado: %v\n", originalFrame.Data, decodedFrame.Data)
 	} else {
@@ -75,7 +75,7 @@ func testDataFrame() {
 }
 
 func testSettingsFrame() {
-	// Cria um SettingsFrame de exemplo com pares chave-valor
+	// create SettingsFrame with key values pairs
 	originalFrame := &SettingsFrame{
 		Settings: map[uint16]uint64{
 			0x1: 0x100,
@@ -83,20 +83,20 @@ func testSettingsFrame() {
 		},
 	}
 
-	// Codifica o frame
+	// encode frame
 	encodedData, err := originalFrame.Encode()
 	if err != nil {
 		log.Fatalf("Erro ao codificar SettingsFrame: %v", err)
 	}
 
-	// Decodifica o frame
+	// decode frame
 	decodedFrame := &SettingsFrame{}
 	err = decodedFrame.Decode(encodedData)
 	if err != nil {
 		log.Fatalf("Erro ao decodificar SettingsFrame: %v", err)
 	}
 
-	// Verifica se os pares chave-valor foram preservados
+	// verify if pairs were preserved
 	for k, v := range originalFrame.Settings {
 		if decodedFrame.Settings[k] != v {
 			fmt.Printf("Erro: Configuração chave %v não corresponde.\nOriginal: %v\nDecodificado: %v\n", k, v, decodedFrame.Settings[k])
@@ -106,4 +106,3 @@ func testSettingsFrame() {
 
 	fmt.Println("SettingsFrame teste passou.")
 }
-
