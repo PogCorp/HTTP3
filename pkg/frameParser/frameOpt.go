@@ -1,10 +1,10 @@
 package main
 
-import(
+import (
 	"bytes"
 	"encoding/binary"
-	"io"
 	"fmt"
+	"io"
 )
 
 // varint encoding is used by RFC 9000
@@ -16,11 +16,11 @@ import(
 /*
 This implements Varint encoding of variable length integers. It adjusts the number of bytes
 used to represent a number based on its value, using a minimum number of bytes for small values
-and more bytes fot larger values. It encodes integers according to the format described in RFC 9000
+and more bytes for larger values. It encodes integers according to the format described in RFC 9000
 and it can generate from 1 to 8 bytes depending on the value of n, which is evaluated in the switch
 
-I) if n < 2^6 = 64 (1 << 64), it can be represented in 6 bits, that is, one single byte
-   In this case, te value is stored directly in the first byte (buf[0]) and this single byte
+I) if n < 2^6 = 64 (1 << 6), it can be represented in 6 bits, that is, one single byte
+   In this case, the value is stored directly in the first byte (buf[0]) and this single byte
    is returned (buf[:1])
 
 II) If n < 2 ^ 14 = 16.384 (1 << 14), it can be represented in 14 bits.
@@ -33,19 +33,19 @@ II) If n < 2 ^ 14 = 16.384 (1 << 14), it can be represented in 14 bits.
 All other cases follow the same logic as the explanation above, but with different ranges for n
 */
 
-func encodeVarint(n uint64) []byte{
-	var buf[8]byte
+func encodeVarint(n uint64) []byte {
+	var buf [8]byte
 
-	switch{
-	case n < 1 << 6:
+	switch {
+	case n < 1<<6:
 		buf[0] = byte(n)
 		return buf[:1]
 
-	case n < 1 << 14:
+	case n < 1<<14:
 		binary.BigEndian.PutUint16(buf[:], uint16(n)|0x4000)
 		return buf[:2]
 
-	case n < 1 << 30:
+	case n < 1<<30:
 		binary.BigEndian.PutUint32(buf[:], uint32(n)|0x80000000)
 		return buf[:4]
 
@@ -55,14 +55,13 @@ func encodeVarint(n uint64) []byte{
 	}
 }
 
-
 func decodeVarint(r io.Reader) (uint64, error) {
 	var b [1]byte
 	if _, err := r.Read(b[:1]); err != nil {
 		return 0, err
 	}
 
-	switch b[0] & 0xC0 {
+	switch lenghtBits := b[0] & 0xC0; lenghtBits {
 	case 0x00:
 		return uint64(b[0]), nil
 	case 0x40:
@@ -70,19 +69,19 @@ func decodeVarint(r io.Reader) (uint64, error) {
 		if _, err := r.Read(n[:1]); err != nil {
 			return 0, err
 		}
-		return uint64(b[0]&0x3F)<<8 | uint64(n[0]), nil
+		return uint64(b[0]&0x3F)<<8 + uint64(n[0]), nil
 	case 0x80:
 		var n [3]byte
 		if _, err := r.Read(n[:3]); err != nil {
 			return 0, err
 		}
-		return uint64(b[0]&0x3F)<<24 | uint64(n[0])<<16 | uint64(n[1])<<8 | uint64(n[2]), nil
+		return uint64(b[0]&0x3F)<<24 + uint64(n[0])<<16 + uint64(n[1])<<8 + uint64(n[2]), nil
 	case 0xC0:
 		var n [7]byte
 		if _, err := r.Read(n[:7]); err != nil {
 			return 0, err
 		}
-		return uint64(b[0]&0x3F)<<56 | uint64(n[0])<<48 | uint64(n[1])<<40 | uint64(n[2])<<32 | uint64(n[3])<<24 | uint64(n[4])<<16 | uint64(n[5])<<8 | uint64(n[6]), nil
+		return uint64(b[0]&0x3F)<<56 + uint64(n[0])<<48 + uint64(n[1])<<40 + uint64(n[2])<<32 + uint64(n[3])<<24 + uint64(n[4])<<16 + uint64(n[5])<<8 + uint64(n[6]), nil
 	}
 	return 0, fmt.Errorf("invalid varint encoding")
 }
@@ -90,26 +89,26 @@ func decodeVarint(r io.Reader) (uint64, error) {
 // -------------------- HEADERS FRAME OPERATIONS ----------------------
 func (hf *HeadersFrame) Encode() ([]byte, error) {
 	buf := &bytes.Buffer{}
-	
+
 	// encodes the frame type
 	if err := binary.Write(buf, binary.BigEndian, FrameTypeHeaders); err != nil {
 		return nil, err
 	}
-	
+
 	// encodes the payload length using varint
 	lengthBytes := encodeVarint(hf.Length())
 	buf.Write(lengthBytes)
-	
+
 	// Writes the compressed headers
 	//TODO: QPACK compression
 	buf.Write(hf.Headers)
-	
+
 	return buf.Bytes(), nil
 }
 
 func (hf *HeadersFrame) Decode(data []byte) error {
 	reader := bytes.NewReader(data)
-	
+
 	// Decodes the frame type (2 bytes)
 	var frameType uint8
 	if err := binary.Read(reader, binary.BigEndian, &frameType); err != nil {
@@ -139,27 +138,27 @@ func (hf *HeadersFrame) Decode(data []byte) error {
 
 // the workflow is constant. Encode frame type, encode the payload length using varint, write the data in the
 // []byte (payload is already in binary)
-// decode frame type, decode payload lenght, use payload length to read the data 
+// decode frame type, decode payload lenght, use payload length to read the data
 
 // -------------------- DATA FRAME OPERATIONS ----------------------
 func (df *DataFrame) Encode() ([]byte, error) {
 	buf := &bytes.Buffer{}
-	
+
 	if err := binary.Write(buf, binary.BigEndian, FrameTypeData); err != nil {
 		return nil, err
 	}
-	
+
 	lengthBytes := encodeVarint(df.Length())
 	buf.Write(lengthBytes)
-	
+
 	buf.Write(df.Data)
-	
+
 	return buf.Bytes(), nil
 }
 
 func (df *DataFrame) Decode(data []byte) error {
 	reader := bytes.NewReader(data)
-	
+
 	var frameType uint8
 	if err := binary.Read(reader, binary.BigEndian, &frameType); err != nil {
 		return err
@@ -185,14 +184,14 @@ func (df *DataFrame) Decode(data []byte) error {
 // -------------------- SETTINGS FRAME OPERATIONS ----------------------
 func (sf *SettingsFrame) Encode() ([]byte, error) {
 	buf := &bytes.Buffer{}
-	
+
 	if err := binary.Write(buf, binary.BigEndian, FrameTypeSettings); err != nil {
 		return nil, err
 	}
-	
+
 	lengthBytes := encodeVarint(sf.Length())
 	buf.Write(lengthBytes)
-	
+
 	// TODO: Use varint encoding for the key and the value (super easy, but I forgot)
 	for k, v := range sf.Settings {
 		if err := binary.Write(buf, binary.BigEndian, k); err != nil {
@@ -202,14 +201,13 @@ func (sf *SettingsFrame) Encode() ([]byte, error) {
 			return nil, err
 		}
 	}
-	
+
 	return buf.Bytes(), nil
 }
 
-
 func (sf *SettingsFrame) Decode(data []byte) error {
 	reader := bytes.NewReader(data)
-	
+
 	var frameType uint8
 	if err := binary.Read(reader, binary.BigEndian, &frameType); err != nil {
 		return err
@@ -250,4 +248,3 @@ func (sf *SettingsFrame) Decode(data []byte) error {
 
 	return nil
 }
-
