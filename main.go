@@ -28,7 +28,7 @@ func main() {
 
 	fmt.Printf("Encoded Headers: %x\n", buf.Bytes())
 
-	headerFields, err := encoder.Decode(buf)
+	headerFields, err := encoder.Decode(buf.Bytes())
 	if err != nil {
 		fmt.Printf("[encoder.Decode] returned error: %+v\n", err)
 		return
