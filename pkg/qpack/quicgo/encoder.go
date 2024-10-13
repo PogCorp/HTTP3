@@ -32,12 +32,7 @@ func (q *quicgoQpackEncoder) Encode(buffer io.Writer, headerFields ...adapter.He
 	return nil
 }
 
-func (q *quicgoQpackEncoder) Decode(reader io.Reader) ([]adapter.HeaderField, error) {
-	data, err := io.ReadAll(reader)
-	if err != nil {
-		return nil, err
-	}
-
+func (q *quicgoQpackEncoder) Decode(data []byte) ([]adapter.HeaderField, error) {
 	decoder := qpack.NewDecoder(nil)
 
 	decodedFields, err := decoder.DecodeFull(data)
