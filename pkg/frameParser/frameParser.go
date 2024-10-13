@@ -5,18 +5,38 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	qpack "poghttp3/pkg/qpack"
+	quicGoAdapter "poghttp3/pkg/qpack/quicgo"
 )
 
 type FrameParser struct {
-	reader io.Reader
+	reader       io.Reader
+	qpackDecoder qpack.QpackApi
 }
+
+type FrameParserOption func(*FrameParser)
+
+func WithQpackApi(qpackApi qpack.QpackApi) FrameParserOption {
+	return func(fp *FrameParser) {
+		fp.qpackDecoder = qpackApi
+	}
+}
+
+var DefaultQpackEncoder qpack.QpackApi = quicGoAdapter.NewQuicGoQpackEncoder()
 
 // frame parser initialization and bindiding with a stream
 // just assuming the stream
-func NewFrameParser(r io.Reader) *FrameParser {
-	return &FrameParser{
-		reader: r,
+func NewFrameParser(r io.Reader, opts ...FrameParserOption) *FrameParser {
+	frameParser := &FrameParser{
+		reader:       r,
+		qpackDecoder: DefaultQpackEncoder,
 	}
+
+	for _, opt := range opts {
+		opt(frameParser)
+	}
+
+	return frameParser
 }
 
 // read stream and parse multiple frames
@@ -52,6 +72,16 @@ func (p *FrameParser) ParseFrames() error {
 				return fmt.Errorf("failed to decode HeadersFrame, got err: %w", err)
 			}
 			fmt.Printf("HEADERS Frame decodificado: %s\n", headersFrame.Headers)
+
+			headerFields, err := p.qpackDecoder.Decode(headersFrame.Headers)
+			if err != nil {
+				fmt.Printf("[encoder.Decode] returned error: %+v\n", err)
+				return fmt.Errorf("failed to decode headers using qpack decoder, got err: %w", err)
+			}
+
+			for _, hf := range headerFields {
+				fmt.Printf("KEY: %s VALUE: %s\n", hf.Name, hf.Value)
+			}
 
 		case FrameTypeData:
 			dataFrame := &DataFrame{}
