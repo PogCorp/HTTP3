@@ -6,6 +6,7 @@ require (
 	github.com/mattn/go-pointer v0.0.1
 	github.com/quic-go/qpack v0.4.0
 	github.com/quic-go/quic-go v0.46.0
+	golang.org/x/net v0.25.0
 )
 
 require (
@@ -17,7 +18,7 @@ require (
 	golang.org/x/crypto v0.23.0 // indirect
 	golang.org/x/exp v0.0.0-20240506185415-9bf2ced13842 // indirect
 	golang.org/x/mod v0.17.0 // indirect
-	golang.org/x/net v0.25.0 // indirect
 	golang.org/x/sys v0.20.0 // indirect
+	golang.org/x/text v0.15.0 // indirect
 	golang.org/x/tools v0.21.0 // indirect
 )
