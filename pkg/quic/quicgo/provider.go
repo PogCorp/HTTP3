@@ -2,42 +2,42 @@ package quicgo
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
 	"crypto/tls"
-	"crypto/x509"
-	"encoding/pem"
 	"fmt"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/logging"
 	"github.com/quic-go/quic-go/qlog"
 	"log"
-	"math/big"
 	"os"
 	"path/filepath"
 	adapter "poghttp3/pkg/quic"
 	"time"
 )
 
-const addr = "localhost:4242"
+// const addr = "localhost:4242"
 
 type QuicGoAdapter struct {
-	Streams map[int64]adapter.QuickStream
+	Streams   map[int64]adapter.QuicStream
+	TLSConfig *tls.Config
 }
 
 func NewQuicGoAdapter() adapter.QuicAdapter {
 	return &QuicGoAdapter{
-		Streams: make(map[int64]adapter.QuickStream),
+		Streams: make(map[int64]adapter.QuicStream),
 	}
 }
 
 type quickServer struct {
-	adapter adapter.QuicAdapter
+	adapter   adapter.QuicAdapter
+	tlsConfig *tls.Config
+	address   string
 }
 
-func NewQuickGoServer(adapter adapter.QuicAdapter) adapter.QuickServer {
+func NewQuickGoServer(address string, tlsConfig *tls.Config, adapter adapter.QuicAdapter) adapter.QuicServer {
 	return &quickServer{
-		adapter: adapter,
+		adapter:   adapter,
+		tlsConfig: tlsConfig,
+		address:   address,
 	}
 }
 
@@ -59,7 +59,7 @@ func (q *quickServer) Listen() error {
 		MaxIdleTimeout: time.Minute * 30,
 	}
 
-	listener, err := quic.ListenAddr(addr, generateTLSConfig(), config)
+	listener, err := quic.ListenAddr(q.address, q.tlsConfig, config)
 	if err != nil {
 		return err
 	}
@@ -77,18 +77,6 @@ func (q *quickServer) Listen() error {
 	}
 }
 
-func (q *QuicGoAdapter) consumeConnectionID() {
-	// for value := range q.ConnectionIdChan {
-	// 	fmt.Printf("Received ConnectionID: %s\n", value)
-	// 	conn := <-q.ConnectionChan
-	// 	fmt.Printf("Received Conn\n")
-	// 	q.Connections[value] = NewConnection(conn, value)
-	// 	fmt.Println("Connection registered\n")
-	// 	q.OnNewConnection(q.Connections[value])
-	// 	// go q.handleConnection(q.Connections[value])
-	// }
-}
-
 func (q *QuicGoAdapter) OnNewStream(streamID int64) {
 	fmt.Printf("Accepted stream with id: %d\n", streamID)
 }
@@ -104,18 +92,6 @@ func (q *QuicGoAdapter) OnCancelledConnection(connectionID string) {
 func (q *QuicGoAdapter) OnNewConnection(connectionID string) {
 	fmt.Printf("Received ConnectionID: %s\n", connectionID)
 
-	// defer conn.CloseWithError(0, "connection closed")
-	//
-	// for {
-	// 	stream, err := conn.AcceptStream(context.Background())
-	// 	if err != nil {
-	// 		log.Printf("Failed to accept stream: %v", err)
-	// 		return
-	// 	}
-	//
-	// 	fmt.Printf("Handling stream from connection id: %s\n", conn.ConnectionID())
-	// 	go conn.OnNewStream(stream)
-	// }
 }
 
 func (q *quickServer) handleConnection(ctx context.Context, conn quic.Connection) {
@@ -242,27 +218,4 @@ func (qs *quicStream) Write(p []byte) (n int, err error) {
 
 func (qs *quicStream) Close() error {
 	return qs.stream.Close()
-}
-
-func generateTLSConfig() *tls.Config {
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		panic(err)
-	}
-	template := x509.Certificate{SerialNumber: big.NewInt(1)}
-	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
-	if err != nil {
-		panic(err)
-	}
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-
-	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
-	if err != nil {
-		panic(err)
-	}
-	return &tls.Config{
-		Certificates: []tls.Certificate{tlsCert},
-		NextProtos:   []string{"quic-echo-example"},
-	}
 }

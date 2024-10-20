@@ -5,7 +5,7 @@ import (
 	"io"
 )
 
-type QuickServer interface {
+type QuicServer interface {
 	Listen() error
 }
 
@@ -16,7 +16,7 @@ type QuicAdapter interface {
 	OnCancelledConnection(connectionID string)
 }
 
-type QuickStream interface {
+type QuicStream interface {
 	io.Writer
 	io.Closer
 }
@@ -38,3 +38,10 @@ type Stream interface {
 	io.Writer
 	io.Closer
 }
+
+type QuicAdapterImplementation int
+
+const (
+	QuicGoAdapterImplementaion QuicAdapterImplementation = iota
+	LsquicAdapterImplementaion
+)
