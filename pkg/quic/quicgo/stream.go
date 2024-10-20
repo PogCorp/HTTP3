@@ -6,24 +6,46 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
-type quicStream struct {
+// ======================= BIDIRECTIONAL STREAMS =======================
+
+type quicBiStream struct {
 	stream quic.Stream
 }
 
-func NewStream(stream quic.Stream) adapter.QuicStream {
-	return &quicStream{
+func NewBiStream(stream quic.Stream) adapter.QuicBiStream {
+	return &quicBiStream{
 		stream: stream,
 	}
 }
 
-func (qs *quicStream) ID() uint64 {
-	return uint64(qs.stream.StreamID())
+func (qs *quicBiStream) ID() adapter.StreamId {
+	return adapter.StreamId(qs.stream.StreamID())
 }
 
-func (qs *quicStream) Write(p []byte) (n int, err error) {
+func (qs *quicBiStream) Write(p []byte) (n int, err error) {
 	return qs.stream.Write(p)
 }
 
-func (qs *quicStream) Close() error {
-	return qs.stream.Close()
+func (qs *quicBiStream) Close(reason adapter.ApplicationError) {
+	qs.stream.CancelRead(quic.StreamErrorCode(reason))
+}
+
+// ======================= UNIDIRECTIONAL STREAMS =======================
+
+type quicUniStream struct {
+	stream quic.SendStream
+}
+
+func NewUniStream(stream quic.SendStream) adapter.QuicUniStream {
+	return &quicUniStream{
+		stream: stream,
+	}
+}
+
+func (qs *quicUniStream) ID() adapter.StreamId {
+	return adapter.StreamId(qs.stream.StreamID())
+}
+
+func (qs *quicUniStream) Write(p []byte) (n int, err error) {
+	return qs.stream.Write(p)
 }
