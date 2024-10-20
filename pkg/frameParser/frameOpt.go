@@ -1,4 +1,4 @@
-package main
+package frameparser
 
 import (
 	"bytes"
