@@ -36,6 +36,8 @@ type QuicUniStream interface {
 
 type QuicConn interface {
 	fmt.Stringer
+	LocalAddress() string
+	RemoteAddress() string
 	Close(reason ApplicationError)
 	CreateUniStream(streamType StreamType) (QuicUniStream, error)
 	// NOTE: a more complete API could include the creation of Bidirectional Streams
