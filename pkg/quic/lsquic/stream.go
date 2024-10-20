@@ -10,24 +10,27 @@ package lsquic
 */
 import "C"
 import (
-	"fmt"
+	"log"
 	adapter "poghttp3/pkg/quic"
 	"unsafe"
 )
 
 type LsQuicStream struct {
+	id             adapter.StreamId
 	lsStream       *C.lsquic_stream_t
 	sendBuffer     **C.char
 	sendBufferSize *C.size_t
 	sendBufferOff  *C.off_t
 }
 
-func (l *LsQuicStream) Close() error {
+func (l *LsQuicStream) Close(reason adapter.ApplicationError) {
+	// NOTE: Lsquic for some reason does not provide an api for canceling
+	//		streams with application error as per 11.2 of RFC 9000
 	ok := C.lsquic_stream_close(l.lsStream)
 	if ok == 0 {
-		return nil
+		return
 	}
-	return fmt.Errorf("could not close stream")
+	log.Printf("could not close stream")
 }
 
 func (l *LsQuicStream) Write(p []byte) (n int, err error) {
@@ -41,13 +44,15 @@ func (l *LsQuicStream) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
-func (l *LsQuicStream) ID() uint64 {
-	id := C.lsquic_stream_id(l.lsStream)
-	return uint64(id)
+func (l *LsQuicStream) ID() adapter.StreamId {
+	return l.id
 }
 
-func NewLsQuicStream(lsStream *C.lsquic_stream_t, streamCtx *C.lsquic_stream_ctx_t) adapter.QuicStream {
+func NewLsQuicStream(lsStream *C.lsquic_stream_t, streamCtx *C.lsquic_stream_ctx_t) adapter.QuicBiStream {
+
+	id := adapter.StreamId(C.lsquic_stream_id(lsStream))
 	return &LsQuicStream{
+		id:             id,
 		lsStream:       lsStream,
 		sendBuffer:     &streamCtx.send_buffer,
 		sendBufferSize: &streamCtx.send_buffer_size,

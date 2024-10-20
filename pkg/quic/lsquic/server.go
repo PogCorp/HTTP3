@@ -94,8 +94,8 @@ func adapterOnNewConnection(conn *C.lsquic_conn_t, streamIfCtx unsafe.Pointer) *
 	if !ok {
 		panic("passed on the incorrect type")
 	}
-	lsQuicCid := NewLsquicCID(conn)
-	server.quicApi.OnNewConnection(lsQuicCid)
+	quicConn := NewLsquicCID(conn)
+	server.quicApi.OnNewConnection(quicConn)
 	log.Printf("on sni: %s\n", goSni)
 	connCtx := (*C.lsquic_conn_ctx_t)(C.malloc(C.sizeof_lsquic_conn_ctx_t))
 	connCtx.adapter_ctx = streamIfCtx
@@ -137,24 +137,12 @@ func adapterOnWrite(stream *C.lsquic_stream_t, streamCtx *C.lsquic_stream_ctx_t)
 		return
 	}
 	streamCtx.send_buffer_off += numWritten
-	server, ok := gopointer.Restore(streamCtx.adapter_ctx).(LsQuicServer)
-	if !ok {
-		panic("passed on the incorrect type")
-	}
-	lsStream := NewLsQuicStream(stream, streamCtx)
-	server.quicApi.OnWriteStream(lsStream)
 	C.lsquic_stream_wantread(stream, C.false)
 	C.lsquic_stream_wantwrite(stream, C.false)
 }
 
 //export adapterOnRead
 func adapterOnRead(stream *C.lsquic_stream_t, buf *C.char, bufSize C.size_t, streamCtx *C.lsquic_stream_ctx_t) {
-	lsStream := NewLsQuicStream(stream, streamCtx)
-	server, ok := gopointer.Restore(streamCtx.adapter_ctx).(LsQuicServer)
-	if !ok {
-		panic("passed on the incorrect type")
-	}
-	server.quicApi.OnWriteStream(lsStream)
 	numRead := C.lsquic_stream_read(stream, unsafe.Pointer(buf), bufSize)
 	if numRead < 0 {
 		log.Println("failure in reading stream, aborting connection")
@@ -162,6 +150,15 @@ func adapterOnRead(stream *C.lsquic_stream_t, buf *C.char, bufSize C.size_t, str
 	}
 	rcvBuf := unsafe.Slice((*byte)(unsafe.Pointer(buf)), numRead)
 	log.Printf("received: '%s'\n", string(rcvBuf))
+
+	lsStream := NewLsQuicStream(stream, streamCtx)
+	server, ok := gopointer.Restore(streamCtx.adapter_ctx).(LsQuicServer)
+	if !ok {
+		panic("passed on the incorrect type")
+	}
+	server.quicApi.OnReadBiStream(lsStream, rcvBuf)
+
+	// TODO: this write is only for tests, this bussiness rule should be internal
 	_, err := lsStream.Write(rcvBuf)
 	if err != nil {
 		log.Println("failed to write bytes")
@@ -172,13 +169,7 @@ func adapterOnRead(stream *C.lsquic_stream_t, buf *C.char, bufSize C.size_t, str
 
 //export adapterOnClose
 func adapterOnClose(stream *C.lsquic_stream_t, streamCtx *C.lsquic_stream_ctx_t) {
-	lsStream := NewLsQuicStream(stream, streamCtx)
-	server, ok := gopointer.Restore(streamCtx.adapter_ctx).(LsQuicServer)
-	if !ok {
-		panic("passed on the incorrect type")
-	}
 	id := C.lsquic_stream_id(stream)
-	server.quicApi.OnWriteStream(lsStream)
 	log.Printf("closing stream with id: #%d\n", uint64(id))
 	C.free(unsafe.Pointer(streamCtx))
 }
