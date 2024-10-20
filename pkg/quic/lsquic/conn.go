@@ -53,6 +53,17 @@ func (l *QuicConn) Close(reason adapter.ApplicationError) {
 	C.lsquic_conn_close(l.lsConn)
 }
 
+func (qc *QuicConn) LocalAddress() string {
+	return ""
+}
+
+func (qc *QuicConn) RemoteAddress() string {
+	// somehow lsquic does not provide an api to access this
+	// even though there is lsquic_conn_get_sockaddr, the returned
+	// data is aways broken
+	return ""
+}
+
 func NewQuicConn(lsConn *C.lsquic_conn_t) adapter.QuicConn {
 	return &QuicConn{
 		lsConn: lsConn,

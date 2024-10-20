@@ -34,3 +34,11 @@ func (qc *QuicGoConn) Close(reason adapter.ApplicationError) {
 		log.Printf("failed to close stream, err: %s", err)
 	}
 }
+
+func (qc *QuicGoConn) LocalAddress() string {
+	return qc.conn.LocalAddr().String()
+}
+
+func (qc *QuicGoConn) RemoteAddress() string {
+	return qc.conn.RemoteAddr().String()
+}
