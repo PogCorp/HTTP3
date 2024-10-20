@@ -35,7 +35,7 @@ func (hdr *Header) IsResponseHeader() bool {
 }
 
 var pseudoHeaderHandlers = map[string]func(*Header, qpack.HeaderField){
-	"path":       func(hdr *Header, headerField qpack.HeaderField) { hdr.Path = headerField.Value },
+	":path":      func(hdr *Header, headerField qpack.HeaderField) { hdr.Path = headerField.Value },
 	":method":    func(hdr *Header, headerField qpack.HeaderField) { hdr.Method = headerField.Value },
 	":authority": func(hdr *Header, headerField qpack.HeaderField) { hdr.Authority = headerField.Value },
 	":protocol":  func(hdr *Header, headerField qpack.HeaderField) { hdr.Protocol = headerField.Value },
