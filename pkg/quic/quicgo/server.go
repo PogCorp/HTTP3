@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log"
+	"net"
 	adapter "poghttp3/pkg/quic"
 	"time"
 
@@ -13,24 +14,41 @@ import (
 	"github.com/quic-go/quic-go/qlog"
 )
 
-const addr = "localhost:4242"
-
 type quicServer struct {
-	quicApi   adapter.QuicAPI
-	tlsConfig *tls.Config
-	sni       string
+	quicApi     adapter.QuicAPI
+	tlsConfig   *tls.Config
+	tracerToCid map[quic.ConnectionTracingID]quic.ConnectionID
+	udpAddr     net.UDPAddr
 }
 
-func NewQuicGoServer(uri, keyfile, certfile string, api adapter.QuicAPI) (adapter.QuicServer, error) {
+type QuicConfig struct {
+	Host     string
+	Keyfile  string
+	Certfile string
+	Alpn     string
+	Api      adapter.QuicAPI
+}
+
+func NewQuicGoServer(host, keyfile, certfile string, api adapter.QuicAPI) (adapter.QuicServer, error) {
 	certficate, err := tls.LoadX509KeyPair(certfile, keyfile)
 	if err != nil {
 		return nil, err
 	}
 
+	if host == "" {
+		host = ":https"
+	}
+
+	udpAddr, err := net.ResolveUDPAddr("udp", host)
+	if err != nil {
+		return nil, err
+	}
+
 	return &quicServer{
-		quicApi:   api,
-		tlsConfig: &tls.Config{Certificates: []tls.Certificate{certficate}},
-		sni:       "TODO",
+		quicApi:     api,
+		tlsConfig:   &tls.Config{Certificates: []tls.Certificate{certficate}},
+		tracerToCid: make(map[quic.ConnectionTracingID]quic.ConnectionID),
+		udpAddr:     *udpAddr,
 	}, nil
 }
 
@@ -39,17 +57,20 @@ func (q *quicServer) Listen() error {
 	config := &quic.Config{
 		EnableDatagrams: true,
 		Tracer: func(ctx context.Context, p logging.Perspective, cid quic.ConnectionID) *logging.ConnectionTracer {
-			quicGoCid := NewQuicGoCID(cid)
-			q.quicApi.OnNewConnection(quicGoCid)
+			traceId := ctx.Value(quic.ConnectionTracingKey).(quic.ConnectionTracingID)
+			q.tracerToCid[traceId] = cid
 			return qlog.DefaultConnectionTracer(ctx, p, cid)
 		},
-		MaxIdleTimeout: time.Minute * 30,
-		GetConfigForClient: func(info *quic.ClientHelloInfo) (*quic.Config, error) {
-			return nil, nil
-		},
+		MaxIdleTimeout: time.Minute * 30, // TODO: this is debug only and should be removed
 	}
 
-	listener, err := quic.ListenAddr(addr, q.tlsConfig, config)
+	udpConn, err := net.ListenUDP("udp", &q.udpAddr)
+	if err != nil {
+		return err
+	}
+	defer udpConn.Close()
+
+	listener, err := quic.Listen(udpConn, q.tlsConfig, config)
 	if err != nil {
 		return err
 	}
@@ -59,7 +80,7 @@ func (q *quicServer) Listen() error {
 		ctx := context.Background()
 		conn, err := listener.Accept(ctx)
 		if err != nil {
-			log.Printf("Failed to accept connection: %v", err)
+			log.Printf("Failed to accept connection: %v\n", err)
 			continue
 		}
 
@@ -68,41 +89,47 @@ func (q *quicServer) Listen() error {
 }
 
 func (q *quicServer) handleConnection(ctx context.Context, conn quic.Connection) {
-	for {
+	connCtx := conn.Context()
+	traceId := connCtx.Value(quic.ConnectionTracingKey).(quic.ConnectionTracingID)
+	cid := q.tracerToCid[traceId]
+	qConn := NewQuicGoConn(cid, conn)
+	q.quicApi.OnNewConnection(qConn)
+	defer q.quicApi.OnCanceledConn(qConn)
+	go func() {
+		for connCtx.Err() == nil {
+			stream, err := conn.AcceptUniStream(ctx)
+			if err != nil {
+				return
+			}
+			go q.handleUniStream(ctx, qConn, stream)
+		}
+	}()
+
+	for connCtx.Err() == nil {
 		stream, err := conn.AcceptStream(ctx)
 		if err != nil {
-			//log.Printf("Failed to accept stream: %v", err)
+			log.Printf("Failed to accept stream: %v\n", err)
 			// TODO: what to do when error
 			return
 		}
-		quicGoStream := NewStream(stream)
-		q.quicApi.OnNewStream(quicGoStream)
-		go q.handleStream(ctx, stream)
+		biStream := NewBiStream(stream)
+		q.quicApi.OnNewBiStream(qConn, biStream)
+		go q.handleBiStream(ctx, qConn, stream)
 	}
 }
 
-func (q *quicServer) handleStream(ctx context.Context, stream quic.Stream) {
-	defer stream.Close()
-	quicGoStream := NewStream(stream)
-	q.quicApi.OnNewStream(quicGoStream)
+func (q *quicServer) handleUniStream(ctx context.Context, conn adapter.QuicConn, stream quic.ReceiveStream) {
+	id := adapter.StreamId(stream.StreamID())
+	q.quicApi.OnNewUniStream(conn, id)
 
-	buf := make([]byte, 4096)
-
-	if _, err := stream.Read(buf); err != nil {
-		log.Printf("Failed to read from stream: %v", err)
-		return
-	}
-
-	fmt.Printf("Received DATA: %s\n", string(buf))
-	q.quicApi.OnReadStream(quicGoStream, buf)
-	q.simpleWrite("This is a response from server", stream)
+	fmt.Println("Received unidirectional DATA")
+	q.quicApi.OnReadUniStream(conn, id, stream)
 }
 
-func (q *quicServer) simpleWrite(data string, stream quic.Stream) {
-	if _, err := stream.Write([]byte(data)); err != nil {
-		log.Printf("Failed to write to stream: %v", err)
-		return
-	}
+func (q *quicServer) handleBiStream(ctx context.Context, conn adapter.QuicConn, stream quic.Stream) {
+	biStream := NewBiStream(stream)
+	q.quicApi.OnNewBiStream(conn, biStream)
 
-	fmt.Printf("Server sent: '%s'\n", data)
+	fmt.Println("Received bidirectional DATA")
+	q.quicApi.OnReadBiStream(conn, biStream, stream)
 }
