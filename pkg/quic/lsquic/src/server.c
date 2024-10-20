@@ -54,6 +54,7 @@ bool new_server(
     lsquic_engine_init_settings(&server->quic_settings, LSENG_SERVER);
     server->quic_settings.es_versions = 1 << LSQVER_I001; // default to version 1 of QUIC
     server->quic_settings.es_ecn = LSQUIC_DF_ECN;
+    server->quic_settings.es_rw_once = true; // eases the span of on_read callback
 
     server->engine_api.ea_packets_out = server_write_socket;
     server->engine_api.ea_packets_out_ctx = server;

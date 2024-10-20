@@ -6,8 +6,8 @@ import (
 )
 
 func main() {
-	api := lsquic.NewLsQuicApi()
-	lsquicServer, err := lsquic.NewLsquicServer("localhost:8080", "../certs/priv.key", "../certs/cert.crt", api)
+	api := lsquic.NewQuicApi()
+	lsquicServer, err := lsquic.NewQuicServer("localhost:8080", "../certs/priv.key", "../certs/cert.crt", api)
 	if err != nil {
 		log.Println("failed to start lsquic server", err)
 		return
