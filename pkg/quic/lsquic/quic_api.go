@@ -1,36 +1,50 @@
 package lsquic
 
-import adapter "poghttp3/pkg/quic"
+import (
+	"io"
+	"log"
+	adapter "poghttp3/pkg/quic"
+)
 
 // TODO:
 
-type LsQuicApi struct {
+type QuicApi struct {
 }
 
-func (l *LsQuicApi) OnNewConnection(conn adapter.QuicConn) {
-
+func (l *QuicApi) OnNewConnection(conn adapter.QuicConn) {
+	log.Printf("Received ConnectionID: %s\n", conn.String())
 }
 
-func (l *LsQuicApi) OnCanceledConn(conn adapter.QuicConn) {
-
+func (l *QuicApi) OnCanceledConn(conn adapter.QuicConn) {
+	log.Printf("Connection with connection id: %s was cancelled\n", conn.String())
 }
 
-func (l *LsQuicApi) OnNewBiStream(conn adapter.QuicConn, stream adapter.QuicBiStream) {
-
+func (l *QuicApi) OnNewBiStream(conn adapter.QuicConn, stream adapter.QuicBiStream) {
+	log.Printf("received bidirectional stream, id: %d\n", stream.ID())
 }
 
-func (l *LsQuicApi) OnReadBiStream(conn adapter.QuicConn, stream adapter.QuicBiStream, rcvData []byte) {
-
+func (l *QuicApi) OnReadBiStream(conn adapter.QuicConn, stream adapter.QuicBiStream, reader io.Reader) {
+	log.Println("adapter on read bidirectional stream")
+	payload := make([]byte, 4096)
+	_, err := reader.Read(payload)
+	if err != nil && err != io.EOF {
+		log.Printf("could not read bidirectional stream, err: %s\n", err)
+		return
+	}
+	_, err = stream.Write(payload)
+	if err != nil {
+		stream.Close(0x01)
+	}
 }
 
-func (l *LsQuicApi) OnNewUniStream(conn adapter.QuicConn, id adapter.StreamId) {
+func (l *QuicApi) OnNewUniStream(conn adapter.QuicConn, id adapter.StreamId) {
 	// NOTE: it is not possible to use unidirectional streams on LSQUIC
 }
 
-func (l *LsQuicApi) OnReadUniStream(conn adapter.QuicConn, id adapter.StreamId, rcvData []byte) {
+func (l *QuicApi) OnReadUniStream(conn adapter.QuicConn, id adapter.StreamId, reader io.Reader) {
 	// NOTE: it is not possible to use unidirectional streams on LSQUIC
 }
 
-func NewLsQuicApi() adapter.QuicAPI {
-	return &LsQuicApi{}
+func NewQuicApi() adapter.QuicAPI {
+	return &QuicApi{}
 }

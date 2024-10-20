@@ -9,12 +9,12 @@
 #ifndef ADAPTER
 #define ADAPTER
 
-extern lsquic_conn_ctx_t* adapterOnNewConnection(lsquic_conn_t* conn, void* stream_if_ctx);
-extern void adapterOnClosedConnection(lsquic_conn_t* conn);
-extern lsquic_stream_ctx_t* adapterOnNewStream(lsquic_stream_t* stream, void* stream_ctx);
-extern void adapterOnRead(lsquic_stream_t* stream, char* buf, size_t buf_size, lsquic_stream_ctx_t* stream_ctx);
-extern void adapterOnWrite(lsquic_stream_t* stream, lsquic_stream_ctx_t* stream_ctx);
-extern void adapterOnClose(lsquic_stream_t* stream, lsquic_stream_ctx_t* stream_ctx);
+extern lsquic_conn_ctx_t* adapterOnNewConnection(lsquic_conn_t* ls_conn, void* stream_if_ctx);
+extern void adapterOnClosedConnection(lsquic_conn_t* ls_conn);
+extern lsquic_stream_ctx_t* adapterOnNewStream(lsquic_stream_t* ls_stream, void* stream_ctx);
+extern void adapterOnRead(lsquic_stream_t* ls_stream, char* buf, size_t buf_size, lsquic_stream_ctx_t* stream_ctx);
+extern void adapterOnWrite(lsquic_stream_t* ls_stream, lsquic_stream_ctx_t* stream_ctx);
+extern void adapterOnClose(lsquic_stream_t* ls_stream, lsquic_stream_ctx_t* stream_ctx);
 
 /* Adapter Callbacks */
 

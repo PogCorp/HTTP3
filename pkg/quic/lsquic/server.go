@@ -41,12 +41,12 @@ import (
 	gopointer "github.com/mattn/go-pointer"
 )
 
-type LsQuicServer struct {
+type QuicServer struct {
 	lsServer *C.Server
 	quicApi  adapter.QuicAPI
 }
 
-func (l *LsQuicServer) Listen() error {
+func (l *QuicServer) Listen() error {
 	_, err := C.server_listen(l.lsServer)
 	if err != nil {
 		return fmt.Errorf("got error while trying to listen, errno: %s", err)
@@ -54,8 +54,8 @@ func (l *LsQuicServer) Listen() error {
 	return nil
 }
 
-func NewLsquicServer(uri, keyfile, certfile string, api adapter.QuicAPI) (adapter.QuicServer, error) {
-	server := LsQuicServer{
+func NewQuicServer(uri, keyfile, certfile string, api adapter.QuicAPI) (adapter.QuicServer, error) {
+	server := QuicServer{
 		lsServer: (*C.Server)(C.malloc(C.sizeof_Server)),
 		quicApi:  api,
 	}
@@ -87,15 +87,15 @@ func NewLsquicServer(uri, keyfile, certfile string, api adapter.QuicAPI) (adapte
 }
 
 //export adapterOnNewConnection
-func adapterOnNewConnection(conn *C.lsquic_conn_t, streamIfCtx unsafe.Pointer) *C.lsquic_conn_ctx_t {
-	sni := C.lsquic_conn_get_sni(conn)
+func adapterOnNewConnection(ls_conn *C.lsquic_conn_t, streamIfCtx unsafe.Pointer) *C.lsquic_conn_ctx_t {
+	sni := C.lsquic_conn_get_sni(ls_conn)
 	goSni := C.GoString(sni)
-	server, ok := gopointer.Restore(streamIfCtx).(LsQuicServer)
+	server, ok := gopointer.Restore(streamIfCtx).(QuicServer)
 	if !ok {
 		panic("passed on the incorrect type")
 	}
-	quicConn := NewLsquicCID(conn)
-	server.quicApi.OnNewConnection(quicConn)
+	conn := NewQuicConn(ls_conn)
+	server.quicApi.OnNewConnection(conn)
 	log.Printf("on sni: %s\n", goSni)
 	connCtx := (*C.lsquic_conn_ctx_t)(C.malloc(C.sizeof_lsquic_conn_ctx_t))
 	connCtx.adapter_ctx = streamIfCtx
@@ -103,73 +103,72 @@ func adapterOnNewConnection(conn *C.lsquic_conn_t, streamIfCtx unsafe.Pointer) *
 }
 
 //export adapterOnClosedConnection
-func adapterOnClosedConnection(conn *C.lsquic_conn_t) {
-	connCtx := C.lsquic_conn_get_ctx(conn)
-	lsQuicCid := NewLsquicCID(conn)
-	server, ok := gopointer.Restore(connCtx.adapter_ctx).(LsQuicServer)
+func adapterOnClosedConnection(ls_conn *C.lsquic_conn_t) {
+	connCtx := C.lsquic_conn_get_ctx(ls_conn)
+	conn := NewQuicConn(ls_conn)
+	server, ok := gopointer.Restore(connCtx.adapter_ctx).(QuicServer)
 	if !ok {
 		panic("passed on the incorrect type")
 	}
-	server.quicApi.OnCanceledConn(lsQuicCid)
-	C.lsquic_conn_set_ctx(conn, nil)
+	server.quicApi.OnCanceledConn(conn)
+	C.lsquic_conn_set_ctx(ls_conn, nil)
 }
 
 //export adapterOnNewStream
-func adapterOnNewStream(stream *C.lsquic_stream_t, streamIfCtx unsafe.Pointer) *C.lsquic_stream_ctx_t {
-	id := C.lsquic_stream_id(stream)
+func adapterOnNewStream(ls_stream *C.lsquic_stream_t, streamIfCtx unsafe.Pointer) *C.lsquic_stream_ctx_t {
+	id := C.lsquic_stream_id(ls_stream)
 	log.Printf("new stream with id: #%d\n", uint64(id))
 	streamCtxOut := (*C.lsquic_stream_ctx_t)(C.malloc(C.sizeof_lsquic_stream_ctx_t))
 	streamCtxOut.adapter_ctx = streamIfCtx
 	streamCtxOut.send_buffer = nil
 	streamCtxOut.send_buffer_size = 0
 	streamCtxOut.send_buffer_off = 0
-	C.lsquic_stream_wantread(stream, C.true)
+	server, ok := gopointer.Restore(streamIfCtx).(QuicServer)
+	if !ok {
+		panic("passed on the incorrect type")
+	}
+	stream := NewQuicBiStream(ls_stream, streamCtxOut)
+	lsconn := C.lsquic_stream_conn(ls_stream)
+	conn := NewQuicConn(lsconn)
+
+	// NOTE: only bidirectional streams are called here because there is no unidirectional stream
+	//		in lsquic
+	server.quicApi.OnNewBiStream(conn, stream)
+	C.lsquic_stream_wantread(ls_stream, C.true)
 	return streamCtxOut
 
 }
 
 //export adapterOnWrite
-func adapterOnWrite(stream *C.lsquic_stream_t, streamCtx *C.lsquic_stream_ctx_t) {
-	numWritten := C.lsquic_stream_write(stream, unsafe.Pointer(streamCtx.send_buffer), streamCtx.send_buffer_size)
-	C.lsquic_stream_flush(stream)
+func adapterOnWrite(ls_stream *C.lsquic_stream_t, streamCtx *C.lsquic_stream_ctx_t) {
+	log.Println("trying to write adapterOnWrite")
+	numWritten := C.lsquic_stream_write(ls_stream, unsafe.Pointer(streamCtx.send_buffer), streamCtx.send_buffer_size)
+	C.lsquic_stream_flush(ls_stream)
 	if numWritten < 0 {
-		log.Println("failed to write to stream")
+		log.Printf("failed to all data to stream")
 		return
 	}
 	streamCtx.send_buffer_off += numWritten
-	C.lsquic_stream_wantread(stream, C.false)
-	C.lsquic_stream_wantwrite(stream, C.false)
+	C.lsquic_stream_wantwrite(ls_stream, C.false)
 }
 
 //export adapterOnRead
-func adapterOnRead(stream *C.lsquic_stream_t, buf *C.char, bufSize C.size_t, streamCtx *C.lsquic_stream_ctx_t) {
-	numRead := C.lsquic_stream_read(stream, unsafe.Pointer(buf), bufSize)
-	if numRead < 0 {
-		log.Println("failure in reading stream, aborting connection")
-		C.lsquic_conn_abort(C.lsquic_stream_conn(stream))
-	}
-	rcvBuf := unsafe.Slice((*byte)(unsafe.Pointer(buf)), numRead)
-	log.Printf("received: '%s'\n", string(rcvBuf))
+func adapterOnRead(ls_stream *C.lsquic_stream_t, buf *C.char, bufSize C.size_t, streamCtx *C.lsquic_stream_ctx_t) {
+	lsconn := C.lsquic_stream_conn(ls_stream)
 
-	lsStream := NewLsQuicStream(stream, streamCtx)
-	server, ok := gopointer.Restore(streamCtx.adapter_ctx).(LsQuicServer)
+	stream := NewQuicBiStream(ls_stream, streamCtx)
+	server, ok := gopointer.Restore(streamCtx.adapter_ctx).(QuicServer)
 	if !ok {
 		panic("passed on the incorrect type")
 	}
-	server.quicApi.OnReadBiStream(lsStream, rcvBuf)
-
-	// TODO: this write is only for tests, this bussiness rule should be internal
-	_, err := lsStream.Write(rcvBuf)
-	if err != nil {
-		log.Println("failed to write bytes")
-		return
-	}
-	C.lsquic_stream_wantread(stream, C.false)
+	reader := NewStreamReader(ls_stream)
+	conn := NewQuicConn(lsconn)
+	server.quicApi.OnReadBiStream(conn, stream, reader)
 }
 
 //export adapterOnClose
-func adapterOnClose(stream *C.lsquic_stream_t, streamCtx *C.lsquic_stream_ctx_t) {
-	id := C.lsquic_stream_id(stream)
+func adapterOnClose(ls_stream *C.lsquic_stream_t, streamCtx *C.lsquic_stream_ctx_t) {
+	id := C.lsquic_stream_id(ls_stream)
 	log.Printf("closing stream with id: #%d\n", uint64(id))
 	C.free(unsafe.Pointer(streamCtx))
 }

@@ -14,18 +14,18 @@ import (
 	adapter "poghttp3/pkg/quic"
 )
 
-type LsQuicConn struct {
+type QuicConn struct {
 	lsConn *C.lsquic_conn_t
 }
 
-func (l *LsQuicConn) String() string {
+func (l *QuicConn) String() string {
 	cid := C.lsquic_conn_id(l.lsConn)
 	cidString := [0x29]C.char{}
 	C.lsquic_hexstr(&cid.buf[0], C.ulong(cid.len), &cidString[0], 0x29)
 	return C.GoString(&cidString[0])
 }
 
-func (l *LsQuicConn) CreateUniStream(streamType adapter.StreamType) (adapter.QuicUniStream, error) {
+func (l *QuicConn) CreateUniStream(streamType adapter.StreamType) (adapter.QuicUniStream, error) {
 	// NOTE: LSQUIC does not implement the creation of unidirectional streams.
 	//		Thought there is the function create_uni_stream_out for this
 	//		it is not accessible for the library user, and the client can
@@ -47,14 +47,14 @@ func (l *LsQuicConn) CreateUniStream(streamType adapter.StreamType) (adapter.Qui
 	return nil, fmt.Errorf("lsquic does not support creation of unidirectional streams")
 }
 
-func (l *LsQuicConn) Close(reason adapter.ApplicationError) {
+func (l *QuicConn) Close(reason adapter.ApplicationError) {
 	// NOTE: Again, there is no way to informe the reason of why this connection is being
 	//		closed
 	C.lsquic_conn_close(l.lsConn)
 }
 
-func NewLsquicCID(lsConn *C.lsquic_conn_t) adapter.QuicConn {
-	return &LsQuicConn{
+func NewQuicConn(lsConn *C.lsquic_conn_t) adapter.QuicConn {
+	return &QuicConn{
 		lsConn: lsConn,
 	}
 }

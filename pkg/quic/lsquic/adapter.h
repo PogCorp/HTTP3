@@ -9,7 +9,7 @@ struct lsquic_stream_ctx {
     char* send_buffer;
     size_t send_buffer_size;
     off_t send_buffer_off;
-    void* adapter_ctx;
+    void* adapter_ctx; // used as key to get server context
 };
 
 /**/

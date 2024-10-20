@@ -1,6 +1,7 @@
 package quicgo
 
 import (
+	"log"
 	adapter "poghttp3/pkg/quic"
 
 	"github.com/quic-go/quic-go"
@@ -28,5 +29,8 @@ func (qc *QuicGoConn) CreateUniStream(streamType adapter.StreamType) (adapter.Qu
 }
 
 func (qc *QuicGoConn) Close(reason adapter.ApplicationError) {
-	qc.conn.CloseWithError(quic.ApplicationErrorCode(reason), "TODO: mapper to message")
+	err := qc.conn.CloseWithError(quic.ApplicationErrorCode(reason), "TODO: mapper to message")
+	if err != nil {
+		log.Printf("failed to close stream, err: %s", err)
+	}
 }
