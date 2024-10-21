@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
-	"time"
 )
 
 // varint encoding is used by RFC 9000
@@ -227,17 +226,30 @@ func (rf *ReservedFrame) Encode() ([]byte, error) {
 		return nil, fmt.Errorf("no length to encode ReservedFrame")
 	}
 	data := make([]byte, rf.FrameLength)
-	now := time.Now()
-	nowBinary, err := now.MarshalBinary()
+	buf := &bytes.Buffer{}
+
+	frameType := encodeVarint(rf.FrameId)
+	_, err := buf.Write(frameType)
 	if err != nil {
-		nowBinary = []byte("ABCDEFGHIJKLMNOPQRSTUVWXYZ123456") // default to this seed instead
+		return nil, err
 	}
+
+	lengthBytes := encodeVarint(rf.Length())
+	_, err = buf.Write(lengthBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	nowBinary := []byte("ABCDEFGHIJKLMNOPQRSTUVWXYZ123456") // default to this seed instead
 	chacha := rand.NewChaCha8([32]byte(nowBinary))
 	_, err = chacha.Read(data)
 	if err != nil {
 		return nil, err
 	}
-	return data, nil
+
+	buf.Write(data)
+
+	return buf.Bytes(), nil
 }
 
 func (rf *ReservedFrame) Decode(reader io.Reader) error {
