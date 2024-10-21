@@ -31,10 +31,11 @@ func testHeadersFrame() {
 	if err != nil {
 		log.Fatalf("Erro ao codificar HeadersFrame: %v", err)
 	}
+	reader := bytes.NewReader(encodedData)
 
 	// decode frame
 	decodedFrame := &HeadersFrame{}
-	err = decodedFrame.Decode(encodedData)
+	err = decodedFrame.Decode(reader)
 	if err != nil {
 		log.Fatalf("Erro ao decodificar HeadersFrame: %v", err)
 	}
@@ -59,9 +60,11 @@ func testDataFrame() {
 		log.Fatalf("Erro ao codificar DataFrame: %v", err)
 	}
 
+	reader := bytes.NewReader(encodedData)
+
 	// decode frame
 	decodedFrame := &DataFrame{}
-	err = decodedFrame.Decode(encodedData)
+	err = decodedFrame.Decode(reader)
 	if err != nil {
 		log.Fatalf("Erro ao decodificar DataFrame: %v", err)
 	}
@@ -89,9 +92,11 @@ func testSettingsFrame() {
 		log.Fatalf("Erro ao codificar SettingsFrame: %v", err)
 	}
 
+	reader := bytes.NewReader(encodedData)
+
 	// decode frame
 	decodedFrame := &SettingsFrame{}
-	err = decodedFrame.Decode(encodedData)
+	err = decodedFrame.Decode(reader)
 	if err != nil {
 		log.Fatalf("Erro ao decodificar SettingsFrame: %v", err)
 	}
