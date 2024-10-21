@@ -1,11 +1,13 @@
 package frameparser
 
+type FrameType = uint64
+
 // defining the frame types according to RFC 9114
 const (
-	FrameTypeHeaders  uint8 = 0x01
-	FrameTypeData     uint8 = 0x00
-	FrameTypeSettings uint8 = 0x04
-	FrameTypeGoAway   uint8 = 0x07
+	FrameHeaders  FrameType = 0x01
+	FrameData     FrameType = 0x00
+	FrameSettings FrameType = 0x04
+	FrameGoAway   FrameType = 0x07
 )
 
 // Frame layout according to RFC 9114
@@ -21,7 +23,7 @@ frame{
 // basic frame interface
 
 type Frame interface {
-	Type() uint8
+	Type() FrameType
 	Length() uint64
 	// the theoretical max defined by RFC 9000  is 2.pow(62-1), hence uint64
 }
@@ -40,8 +42,8 @@ type HeadersFrame struct {
 	Headers     []byte // compressed headers using QPACK
 }
 
-func (hf *HeadersFrame) Type() uint8 {
-	return FrameTypeHeaders
+func (hf *HeadersFrame) Type() FrameType {
+	return FrameHeaders
 }
 
 func (hf *HeadersFrame) Length() uint64 {
@@ -55,8 +57,8 @@ type DataFrame struct {
 	Data        []byte
 }
 
-func (df *DataFrame) Type() uint8 {
-	return FrameTypeData
+func (df *DataFrame) Type() FrameType {
+	return FrameData
 }
 
 func (df *DataFrame) Length() uint64 {
@@ -69,8 +71,8 @@ type SettingsFrame struct {
 	Settings map[uint16]uint64 //key-value pairs for HTTP/3 settings
 }
 
-func (sf *SettingsFrame) Type() uint8 {
-	return FrameTypeSettings
+func (sf *SettingsFrame) Type() FrameType {
+	return FrameSettings
 }
 
 func (sf *SettingsFrame) Length() uint64 {
@@ -84,12 +86,27 @@ type GoAwayFrame struct {
 	StreamID uint64 // the last stream ID that the server will process
 }
 
-func (gf *GoAwayFrame) Type() uint8 {
-	return FrameTypeGoAway
+func (gf *GoAwayFrame) Type() FrameType {
+	return FrameGoAway
 }
 
 func (gf *GoAwayFrame) Length() uint64 {
 	return 8 // this is the fixed length for the GOAWAY frame, since it represnts a stream StreamID
 	// RFC 9000: "A stream ID is a 62 bit integer".
 	//The other two bits are the stream identifiers
+}
+
+// ====== Reserved FRAMES ======
+
+type ReservedFrame struct {
+	FrameId     FrameType
+	FrameLength uint64
+}
+
+func (rf *ReservedFrame) Type() FrameType {
+	return rf.FrameId
+}
+
+func (rf *ReservedFrame) Length() uint64 {
+	return rf.FrameLength
 }

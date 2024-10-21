@@ -2,8 +2,12 @@ package frameparser
 
 import (
 	"bytes"
+	"encoding/binary"
 	"testing"
 )
+
+// FIX: change parameters of decode to io.Reader
+//		certify that this tests pass
 
 func TestEncodeDecodeHeadersFrame(t *testing.T) {
 	hf := &HeadersFrame{
@@ -56,7 +60,9 @@ func TestDecodeUnexpectedFrameType(t *testing.T) {
 }
 
 func TestDecodeDataFrameInsufficientData(t *testing.T) {
-	invalidDataFrame := []byte{FrameTypeData, 0x01}
+	invalidDataFrame := make([]byte, 5)
+	binary.BigEndian.PutUint64(invalidDataFrame, FrameData)
+	invalidDataFrame = append(invalidDataFrame, byte(0x01))
 
 	var decodedDataFrame DataFrame
 	err := decodedDataFrame.Decode(invalidDataFrame)
