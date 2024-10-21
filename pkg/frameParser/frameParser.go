@@ -5,20 +5,17 @@ import (
 	"fmt"
 	"io"
 	"log"
-	qpack "poghttp3/pkg/qpack"
 )
 
 type FrameParser struct {
-	reader       io.Reader
-	qpackDecoder qpack.QpackApi
+	reader io.Reader
 }
 
 // frame parser initialization and bindiding with a stream
 // just assuming the stream
-func NewFrameParser(r io.Reader, qpack qpack.QpackApi) *FrameParser {
+func NewFrameParser(r io.Reader) *FrameParser {
 	return &FrameParser{
-		reader:       r,
-		qpackDecoder: qpack,
+		reader: r,
 	}
 }
 
@@ -28,13 +25,13 @@ func (p *FrameParser) ParseNextFrame() (Frame, error) {
 	frameType, _, err := decodeVarint(p.reader)
 	if err != nil {
 		if errors.Is(err, io.EOF) {
-			fmt.Println("End of File Received")
+			log.Println("End of File Received")
 			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to read byte data, got err: %w", err)
 	}
 
-	length, _, err := decodeVarint(p.reader)
+	length, err := p.readFrameLength()
 	if err != nil {
 		return nil, err
 	}
@@ -48,17 +45,6 @@ func (p *FrameParser) ParseNextFrame() (Frame, error) {
 		if err := headersFrame.Decode(p.reader); err != nil {
 			return nil, fmt.Errorf("failed to decode HeadersFrame, got err: %w", err)
 		}
-		fmt.Printf("HEADERS Frame decoded: %s\n", headersFrame.Headers)
-
-		headerFields, err := p.qpackDecoder.Decode(headersFrame.Headers)
-		if err != nil {
-			fmt.Printf("[encoder.Decode] returned error: %+v\n", err)
-			return nil, fmt.Errorf("failed to decode headers using qpack decoder, got err: %w", err)
-		}
-
-		for _, hf := range headerFields {
-			fmt.Printf("KEY: %s VALUE: %s\n", hf.Name, hf.Value)
-		}
 
 		return headersFrame, nil
 	case FrameData:
@@ -68,7 +54,7 @@ func (p *FrameParser) ParseNextFrame() (Frame, error) {
 		if err := dataFrame.Decode(p.reader); err != nil {
 			return nil, fmt.Errorf("failed to decode DataFrame, got err: %w", err)
 		}
-		fmt.Printf("Decoded DataFrame: %s\n", dataFrame.Data)
+		log.Printf("Decoded DataFrame: %s\n", dataFrame.Data)
 
 		return dataFrame, nil
 	case FrameSettings:
@@ -78,7 +64,7 @@ func (p *FrameParser) ParseNextFrame() (Frame, error) {
 		if err := settingsFrame.Decode(p.reader); err != nil {
 			return nil, fmt.Errorf("failed to decode SettingsFrame, got err: %w", err)
 		}
-		fmt.Println("SettingsFrame decoded")
+		log.Println("SettingsFrame decoded")
 
 		return settingsFrame, nil
 
@@ -89,7 +75,7 @@ func (p *FrameParser) ParseNextFrame() (Frame, error) {
 			FrameLength: length,
 		}
 		if err := reservedFrame.Decode(p.reader); err != nil {
-			log.Printf("failed to decode ReservedFrame, got err: %w", err)
+			log.Printf("failed to decode ReservedFrame, got err: %s", err)
 		}
 
 		return reservedFrame, nil

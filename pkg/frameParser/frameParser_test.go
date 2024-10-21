@@ -2,16 +2,24 @@ package frameparser
 
 import (
 	"bytes"
-	"encoding/binary"
+	adapter "poghttp3/pkg/qpack"
+	"poghttp3/pkg/qpack/quicgo"
 	"testing"
 )
 
-// FIX: change parameters of decode to io.Reader
-//		certify that this tests pass
+// TEST: integration tests that test the interaction of encoding frames and decoding from them back
 
 func TestEncodeDecodeHeadersFrame(t *testing.T) {
+	qpack := quicgo.NewQuicGoQpackEncoder()
+	buf := &bytes.Buffer{}
+	err := qpack.Encode(buf, adapter.HeaderField{Name: "Test Name", Value: "Test Headers"})
+	if err != nil {
+		t.Fatalf("Failed to encode HeadersField content: %v", err)
+	}
+
 	hf := &HeadersFrame{
-		Headers: []byte("Test Headers"),
+		FrameLength: uint64(buf.Len()),
+		Headers:     buf.Bytes(),
 	}
 
 	encoded, err := hf.Encode()
@@ -21,19 +29,27 @@ func TestEncodeDecodeHeadersFrame(t *testing.T) {
 
 	reader := bytes.NewReader(encoded)
 
-	var decodedHeadersFrame HeadersFrame
-	if err := decodedHeadersFrame.Decode(reader); err != nil {
+	parser := NewFrameParser(reader)
+	frame, err := parser.ParseNextFrame()
+	if err != nil {
 		t.Fatalf("Failed to decode HeadersFrame: %v", err)
 	}
 
+	decodedHeadersFrame, ok := frame.(*HeadersFrame)
+	if !ok {
+		t.Fatalf("Frame Parser returned incorrect type")
+	}
+
 	if !bytes.Equal(hf.Headers, decodedHeadersFrame.Headers) {
-		t.Errorf("Decoded headers do not match: expected %v, got %v", hf.Headers, decodedHeadersFrame.Headers)
+		t.Errorf("Decoded data do not match: expected %v, got %v", hf.Headers, decodedHeadersFrame.Headers)
 	}
 }
 
 func TestEncodeDecodeDataFrame(t *testing.T) {
+	data := []byte("Hello, HTTP/3")
 	df := &DataFrame{
-		Data: []byte("Hello, HTTP/3"),
+		FrameLength: uint64(len(data)),
+		Data:        data,
 	}
 
 	encoded, err := df.Encode()
@@ -43,9 +59,15 @@ func TestEncodeDecodeDataFrame(t *testing.T) {
 
 	reader := bytes.NewReader(encoded)
 
-	var decodedDataFrame DataFrame
-	if err := decodedDataFrame.Decode(reader); err != nil {
+	parser := NewFrameParser(reader)
+	frame, err := parser.ParseNextFrame()
+	if err != nil {
 		t.Fatalf("Failed to decode DataFrame: %v", err)
+	}
+
+	decodedDataFrame, ok := frame.(*DataFrame)
+	if !ok {
+		t.Fatalf("Frame Parser returned incorrect type")
 	}
 
 	if !bytes.Equal(df.Data, decodedDataFrame.Data) {
@@ -53,28 +75,59 @@ func TestEncodeDecodeDataFrame(t *testing.T) {
 	}
 }
 
-func TestDecodeUnexpectedFrameType(t *testing.T) {
-	invalidFrame := []byte{0xFF}
+func TestDecodeReservedFrameType(t *testing.T) {
+	reservedFrame := ReservedFrame{
+		FrameId:     0xFF,
+		FrameLength: 10,
+	}
 
-	reader := bytes.NewReader(invalidFrame)
+	encoded, err := reservedFrame.Encode()
+	if err != nil {
+		t.Fatalf("Failed to encode ReservedFrame: %v", err)
+	}
 
-	var decodedHeadersFrame HeadersFrame
-	err := decodedHeadersFrame.Decode(reader)
-	if err == nil {
-		t.Fatalf("Expected error when decoding invalid frame type, got none")
+	reader := bytes.NewReader(encoded)
+
+	parser := NewFrameParser(reader)
+
+	frame, err := parser.ParseNextFrame()
+	if err != nil {
+		t.Fatalf("Failed to decode DataFrame: %v", err)
+	}
+
+	decodedReservedFrame, ok := frame.(*ReservedFrame)
+	if !ok {
+		t.Fatalf("Frame Parser returned incorrect type")
+	}
+
+	if decodedReservedFrame.Length() != reservedFrame.Length() {
+		t.Errorf(
+			"Decoded data length did not match: expected %d, got %v",
+			decodedReservedFrame.Length(),
+			reservedFrame.Length(),
+		)
 	}
 }
 
 func TestDecodeDataFrameInsufficientData(t *testing.T) {
-	invalidDataFrame := make([]byte, 5)
-	binary.BigEndian.PutUint64(invalidDataFrame, FrameData)
-	invalidDataFrame = append(invalidDataFrame, byte(0x01))
+	buf := &bytes.Buffer{}
+	encodedType := encodeVarint(FrameData)
+	_, err := buf.Write(encodedType)
+	if err != nil {
+		t.Fatalf("failed to write frame type")
+	}
+	encodedLength := encodeVarint(4)
+	_, err = buf.Write(encodedLength)
+	if err != nil {
+		t.Fatalf("failed to write frame length")
+	}
+	buf.Write([]byte{0x01, 0x02, 0x03})
 
-	reader := bytes.NewReader(invalidDataFrame)
+	reader := bytes.NewReader(buf.Bytes())
 
-	var decodedDataFrame DataFrame
-	err := decodedDataFrame.Decode(reader)
+	parser := NewFrameParser(reader)
+	_, err = parser.ParseNextFrame()
 	if err == nil {
-		t.Fatalf("Expected error when decoding DataFrame with insufficient data, got none")
+		t.Fatalf("Expected error when decoding DataFrame with EOF signal")
 	}
 }
