@@ -1,12 +1,11 @@
 package frameparser
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	qpack "poghttp3/pkg/qpack"
-	quicGoAdapter "poghttp3/pkg/qpack/quicgo"
 )
 
 type FrameParser struct {
@@ -14,80 +13,35 @@ type FrameParser struct {
 	qpackDecoder qpack.QpackApi
 }
 
-type FrameParserOption func(*FrameParser)
-
-func WithQpackApi(qpackApi qpack.QpackApi) FrameParserOption {
-	return func(fp *FrameParser) {
-		fp.qpackDecoder = qpackApi
-	}
-}
-
-var DefaultQpackEncoder qpack.QpackApi = quicGoAdapter.NewQuicGoQpackEncoder()
-
 // frame parser initialization and bindiding with a stream
 // just assuming the stream
-func NewFrameParser(r io.Reader, opts ...FrameParserOption) *FrameParser {
-	frameParser := &FrameParser{
+func NewFrameParser(r io.Reader, qpack qpack.QpackApi) *FrameParser {
+	return &FrameParser{
 		reader:       r,
-		qpackDecoder: DefaultQpackEncoder,
+		qpackDecoder: qpack,
 	}
-
-	for _, opt := range opts {
-		opt(frameParser)
-	}
-
-	return frameParser
-}
-
-func (p *FrameParser) readFrameType() (uint8, error) {
-	var frameType uint8
-	if err := binary.Read(p.reader, binary.BigEndian, &frameType); err != nil {
-		if errors.Is(err, io.EOF) {
-			fmt.Println("End of File Received")
-			return 0, nil
-		}
-		return 0, fmt.Errorf("failed to read byte data, got err: %w", err)
-	}
-
-	return frameType, nil
-}
-
-func (p *FrameParser) readFrameLength() (uint64, error) {
-	var length uint16
-	if err := binary.Read(p.reader, binary.BigEndian, &length); err != nil {
-		return 0, err
-	}
-	return uint64(length), nil
 }
 
 // read stream and parse multiple frames
 func (p *FrameParser) ParseNextFrame() (Frame, error) {
 	// read the frame type (the first byte)
-	frameType, err := p.readFrameType()
+	frameType, _, err := decodeVarint(p.reader)
 	if err != nil {
-		return nil, err
-	}
-
-	// read the length field
-	length, err := p.readFrameLength()
-	if err != nil {
-		return nil, fmt.Errorf("unable to acquire frame lenght, got err: %w", err)
-	}
-
-	// read the payload according to its length
-	payload := make([]byte, length)
-	if _, err := io.ReadFull(p.reader, payload); err != nil {
-		return nil, fmt.Errorf("failed to read frame data, got err: %w", err)
+		if errors.Is(err, io.EOF) {
+			fmt.Println("End of File Received")
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to read byte data, got err: %w", err)
 	}
 
 	// parse frame according to it's type
 	switch frameType {
-	case FrameTypeHeaders:
+	case FrameHeaders:
 		headersFrame := &HeadersFrame{}
-		if err := headersFrame.Decode(payload); err != nil {
+		if err := headersFrame.Decode(p.reader); err != nil {
 			return nil, fmt.Errorf("failed to decode HeadersFrame, got err: %w", err)
 		}
-		fmt.Printf("HEADERS Frame decodificado: %s\n", headersFrame.Headers)
+		fmt.Printf("HEADERS Frame decoded: %s\n", headersFrame.Headers)
 
 		headerFields, err := p.qpackDecoder.Decode(headersFrame.Headers)
 		if err != nil {
@@ -100,28 +54,38 @@ func (p *FrameParser) ParseNextFrame() (Frame, error) {
 		}
 
 		return headersFrame, nil
-	case FrameTypeData:
+	case FrameData:
 		dataFrame := &DataFrame{}
-		if err := dataFrame.Decode(payload); err != nil {
+		if err := dataFrame.Decode(p.reader); err != nil {
 			return nil, fmt.Errorf("failed to decode DataFrame, got err: %w", err)
 		}
 		fmt.Printf("Decoded DataFrame: %s\n", dataFrame.Data)
 
 		return dataFrame, nil
-	case FrameTypeSettings:
+	case FrameSettings:
 		settingsFrame := &SettingsFrame{}
-		if err := settingsFrame.Decode(payload); err != nil {
+		if err := settingsFrame.Decode(p.reader); err != nil {
 			return nil, fmt.Errorf("failed to decode SettingsFrame, got err: %w", err)
 		}
 		fmt.Println("SettingsFrame decoded")
 
 		return settingsFrame, nil
+
+		// TODO: add GoAway Frame case here
 	default:
-		// NOTE: in this case we have received unknown frames so discard it
-		if _, err := io.CopyN(io.Discard, p.reader, int64(length)); err != nil {
-			return nil, err
+		reservedFrame := &ReservedFrame{}
+		if err := reservedFrame.Decode(p.reader); err != nil {
+			log.Printf("failed to decode ReservedFrame, got err: %w", err)
 		}
 
-		return nil, fmt.Errorf("unknown frame Type: %d", frameType)
+		return reservedFrame, nil
 	}
+}
+
+func (p *FrameParser) readFrameLength() (uint64, error) {
+	length, _, err := decodeVarint(p.reader)
+	if err != nil {
+		return 0, err
+	}
+	return length, nil
 }

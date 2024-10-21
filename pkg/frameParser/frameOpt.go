@@ -55,35 +55,35 @@ func encodeVarint(n uint64) []byte {
 	}
 }
 
-func decodeVarint(r io.Reader) (uint64, error) {
+func decodeVarint(r io.Reader) (value uint64, lenght uint64, err error) {
 	var b [1]byte
-	if _, err := r.Read(b[:1]); err != nil {
-		return 0, err
+	if _, err = r.Read(b[:1]); err != nil {
+		return 0, 0, err
 	}
 
 	switch lenghtBits := b[0] & 0xC0; lenghtBits {
 	case 0x00:
-		return uint64(b[0]), nil
+		return uint64(b[0]), 1, nil
 	case 0x40:
 		var n [1]byte
-		if _, err := r.Read(n[:1]); err != nil {
-			return 0, err
+		if _, err = r.Read(n[:1]); err != nil {
+			return
 		}
-		return uint64(b[0]&0x3F)<<8 + uint64(n[0]), nil
+		return uint64(b[0]&0x3F)<<8 + uint64(n[0]), 2, nil
 	case 0x80:
 		var n [3]byte
-		if _, err := r.Read(n[:3]); err != nil {
-			return 0, err
+		if _, err = r.Read(n[:3]); err != nil {
+			return
 		}
-		return uint64(b[0]&0x3F)<<24 + uint64(n[0])<<16 + uint64(n[1])<<8 + uint64(n[2]), nil
+		return uint64(b[0]&0x3F)<<24 + uint64(n[0])<<16 + uint64(n[1])<<8 + uint64(n[2]), 4, nil
 	case 0xC0:
 		var n [7]byte
-		if _, err := r.Read(n[:7]); err != nil {
-			return 0, err
+		if _, err = r.Read(n[:7]); err != nil {
+			return
 		}
-		return uint64(b[0]&0x3F)<<56 + uint64(n[0])<<48 + uint64(n[1])<<40 + uint64(n[2])<<32 + uint64(n[3])<<24 + uint64(n[4])<<16 + uint64(n[5])<<8 + uint64(n[6]), nil
+		return uint64(b[0]&0x3F)<<56 + uint64(n[0])<<48 + uint64(n[1])<<40 + uint64(n[2])<<32 + uint64(n[3])<<24 + uint64(n[4])<<16 + uint64(n[5])<<8 + uint64(n[6]), 8, nil
 	}
-	return 0, fmt.Errorf("invalid varint encoding")
+	return 0, 0, fmt.Errorf("invalid varint encoding")
 }
 
 // -------------------- HEADERS FRAME OPERATIONS ----------------------
@@ -91,7 +91,9 @@ func (hf *HeadersFrame) Encode() ([]byte, error) {
 	buf := &bytes.Buffer{}
 
 	// encodes the frame type
-	if err := binary.Write(buf, binary.BigEndian, FrameTypeHeaders); err != nil {
+	frameType := encodeVarint(FrameHeaders) // HACK: constants can be put here, so no operation needs to be done
+	_, err := buf.Write(frameType)
+	if err != nil {
 		return nil, err
 	}
 
@@ -100,26 +102,15 @@ func (hf *HeadersFrame) Encode() ([]byte, error) {
 	buf.Write(lengthBytes)
 
 	// Writes the compressed headers
-	//TODO: QPACK compression
 	buf.Write(hf.Headers)
 
 	return buf.Bytes(), nil
 }
 
-func (hf *HeadersFrame) Decode(data []byte) error {
-	reader := bytes.NewReader(data)
-
-	// Decodes the frame type (2 bytes)
-	var frameType uint8
-	if err := binary.Read(reader, binary.BigEndian, &frameType); err != nil {
-		return err
-	}
-	if frameType != FrameTypeHeaders {
-		return fmt.Errorf("expected HEADERS frame, got %d", frameType)
-	}
+func (hf *HeadersFrame) Decode(reader io.Reader) error {
 
 	// Decodes the payload length using varint
-	length, err := decodeVarint(reader)
+	length, _, err := decodeVarint(reader)
 	if err != nil {
 		return err
 	}
@@ -130,8 +121,6 @@ func (hf *HeadersFrame) Decode(data []byte) error {
 	if _, err := io.ReadFull(reader, hf.Headers); err != nil {
 		return err
 	}
-
-	// TODO: QPACK decompression
 
 	return nil
 }
@@ -144,30 +133,29 @@ func (hf *HeadersFrame) Decode(data []byte) error {
 func (df *DataFrame) Encode() ([]byte, error) {
 	buf := &bytes.Buffer{}
 
-	if err := binary.Write(buf, binary.BigEndian, FrameTypeData); err != nil {
+	frameType := encodeVarint(FrameData)
+	_, err := buf.Write(frameType)
+	if err != nil {
 		return nil, err
 	}
 
 	lengthBytes := encodeVarint(df.Length())
-	buf.Write(lengthBytes)
+	_, err = buf.Write(lengthBytes)
+	if err != nil {
+		return nil, err
+	}
 
-	buf.Write(df.Data)
+	_, err = buf.Write(df.Data)
+	if err != nil {
+		return nil, err
+	}
 
 	return buf.Bytes(), nil
 }
 
-func (df *DataFrame) Decode(data []byte) error {
-	reader := bytes.NewReader(data)
+func (df *DataFrame) Decode(reader io.Reader) error {
 
-	var frameType uint8
-	if err := binary.Read(reader, binary.BigEndian, &frameType); err != nil {
-		return err
-	}
-	if frameType != FrameTypeData {
-		return fmt.Errorf("expected DATA frame, got %d", frameType)
-	}
-
-	length, err := decodeVarint(reader)
+	length, _, err := decodeVarint(reader)
 	if err != nil {
 		return err
 	}
@@ -185,38 +173,20 @@ func (df *DataFrame) Decode(data []byte) error {
 func (sf *SettingsFrame) Encode() ([]byte, error) {
 	buf := &bytes.Buffer{}
 
-	if err := binary.Write(buf, binary.BigEndian, FrameTypeSettings); err != nil {
-		return nil, err
-	}
-
 	lengthBytes := encodeVarint(sf.Length())
 	buf.Write(lengthBytes)
 
-	// TODO: Use varint encoding for the key and the value (super easy, but I forgot)
 	for k, v := range sf.Settings {
-		if err := binary.Write(buf, binary.BigEndian, k); err != nil {
-			return nil, err
-		}
-		if err := binary.Write(buf, binary.BigEndian, v); err != nil {
-			return nil, err
-		}
+		buf.Write(encodeVarint(uint64(k)))
+		buf.Write(encodeVarint(v))
 	}
 
 	return buf.Bytes(), nil
 }
 
-func (sf *SettingsFrame) Decode(data []byte) error {
-	reader := bytes.NewReader(data)
+func (sf *SettingsFrame) Decode(reader io.Reader) error {
 
-	var frameType uint8
-	if err := binary.Read(reader, binary.BigEndian, &frameType); err != nil {
-		return err
-	}
-	if frameType != FrameTypeSettings {
-		return fmt.Errorf("expected SETTINGS frame, got %d", frameType)
-	}
-
-	length, err := decodeVarint(reader)
+	length, _, err := decodeVarint(reader)
 	if err != nil {
 		return err
 	}
@@ -227,24 +197,41 @@ func (sf *SettingsFrame) Decode(data []byte) error {
 	// Reads each key-value pair of the payload
 	bytesRead := uint64(0)
 	for bytesRead < length {
-		var key uint16
-		var value uint64
 
-		// Reads the key (2 bytes)
-		if err := binary.Read(reader, binary.BigEndian, &key); err != nil {
+		key, keyLen, err := decodeVarint(reader)
+		if err != nil {
 			return err
 		}
-		bytesRead += 2
 
-		// Reads the value (8 bytes)
-		if err := binary.Read(reader, binary.BigEndian, &value); err != nil {
+		bytesRead += keyLen
+
+		value, valueLen, err := decodeVarint(reader)
+		if err != nil {
 			return err
 		}
-		bytesRead += 8
+		bytesRead += valueLen
 
 		// Stores the key-value pay in the map
-		sf.Settings[key] = value
+		sf.Settings[uint16(key)] = value
+	}
+
+	if bytesRead != length {
+		return fmt.Errorf("malformed Settings Frame, length field not equal frame payload size")
 	}
 
 	return nil
 }
+
+func (rf *ReservedFrame) Decode(reader io.Reader) error {
+	length, _, err := decodeVarint(reader)
+	if err != nil {
+		return err
+	}
+
+	if _, err := io.CopyN(io.Discard, reader, int64(length)); err != nil {
+		return err
+	}
+	return nil
+}
+
+// TODO: missing GoAway decoder and encoder
