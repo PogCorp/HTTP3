@@ -68,7 +68,8 @@ func (df *DataFrame) Length() uint64 {
 // ====== SETTINGS FRAME ======
 
 type SettingsFrame struct {
-	Settings map[uint16]uint64 //key-value pairs for HTTP/3 settings
+	FrameLength uint64
+	Settings    map[uint16]uint64 //key-value pairs for HTTP/3 settings
 }
 
 func (sf *SettingsFrame) Type() FrameType {
@@ -76,7 +77,7 @@ func (sf *SettingsFrame) Type() FrameType {
 }
 
 func (sf *SettingsFrame) Length() uint64 {
-	return uint64(len(sf.Settings) * (2 + 8))
+	return sf.FrameLength
 	//each setting is 2 bytes (the key) plus 8 bytes (value)
 }
 

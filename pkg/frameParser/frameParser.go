@@ -34,10 +34,17 @@ func (p *FrameParser) ParseNextFrame() (Frame, error) {
 		return nil, fmt.Errorf("failed to read byte data, got err: %w", err)
 	}
 
+	length, _, err := decodeVarint(p.reader)
+	if err != nil {
+		return nil, err
+	}
+
 	// parse frame according to it's type
 	switch frameType {
 	case FrameHeaders:
-		headersFrame := &HeadersFrame{}
+		headersFrame := &HeadersFrame{
+			FrameLength: length,
+		}
 		if err := headersFrame.Decode(p.reader); err != nil {
 			return nil, fmt.Errorf("failed to decode HeadersFrame, got err: %w", err)
 		}
@@ -55,7 +62,9 @@ func (p *FrameParser) ParseNextFrame() (Frame, error) {
 
 		return headersFrame, nil
 	case FrameData:
-		dataFrame := &DataFrame{}
+		dataFrame := &DataFrame{
+			FrameLength: length,
+		}
 		if err := dataFrame.Decode(p.reader); err != nil {
 			return nil, fmt.Errorf("failed to decode DataFrame, got err: %w", err)
 		}
@@ -63,7 +72,9 @@ func (p *FrameParser) ParseNextFrame() (Frame, error) {
 
 		return dataFrame, nil
 	case FrameSettings:
-		settingsFrame := &SettingsFrame{}
+		settingsFrame := &SettingsFrame{
+			FrameLength: length,
+		}
 		if err := settingsFrame.Decode(p.reader); err != nil {
 			return nil, fmt.Errorf("failed to decode SettingsFrame, got err: %w", err)
 		}
@@ -73,7 +84,10 @@ func (p *FrameParser) ParseNextFrame() (Frame, error) {
 
 		// TODO: add GoAway Frame case here
 	default:
-		reservedFrame := &ReservedFrame{}
+		reservedFrame := &ReservedFrame{
+			FrameId:     frameType,
+			FrameLength: length,
+		}
 		if err := reservedFrame.Decode(p.reader); err != nil {
 			log.Printf("failed to decode ReservedFrame, got err: %w", err)
 		}

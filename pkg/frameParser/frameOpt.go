@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math/rand/v2"
+	"time"
 )
 
 // varint encoding is used by RFC 9000
@@ -109,15 +111,8 @@ func (hf *HeadersFrame) Encode() ([]byte, error) {
 
 func (hf *HeadersFrame) Decode(reader io.Reader) error {
 
-	// Decodes the payload length using varint
-	length, _, err := decodeVarint(reader)
-	if err != nil {
-		return err
-	}
-
 	// Reads the payload
-	hf.FrameLength = length
-	hf.Headers = make([]byte, length)
+	hf.Headers = make([]byte, hf.FrameLength)
 	if _, err := io.ReadFull(reader, hf.Headers); err != nil {
 		return err
 	}
@@ -131,6 +126,10 @@ func (hf *HeadersFrame) Decode(reader io.Reader) error {
 
 // -------------------- DATA FRAME OPERATIONS ----------------------
 func (df *DataFrame) Encode() ([]byte, error) {
+	if df.FrameLength <= 0 {
+		return nil, fmt.Errorf("no payload to encode DataFrame")
+	}
+
 	buf := &bytes.Buffer{}
 
 	frameType := encodeVarint(FrameData)
@@ -155,13 +154,7 @@ func (df *DataFrame) Encode() ([]byte, error) {
 
 func (df *DataFrame) Decode(reader io.Reader) error {
 
-	length, _, err := decodeVarint(reader)
-	if err != nil {
-		return err
-	}
-
-	df.FrameLength = length
-	df.Data = make([]byte, length)
+	df.Data = make([]byte, df.FrameLength)
 	if _, err := io.ReadFull(reader, df.Data); err != nil {
 		return err
 	}
@@ -171,10 +164,22 @@ func (df *DataFrame) Decode(reader io.Reader) error {
 
 // -------------------- SETTINGS FRAME OPERATIONS ----------------------
 func (sf *SettingsFrame) Encode() ([]byte, error) {
+	if len(sf.Settings) <= 0 {
+		return nil, fmt.Errorf("no settings to encode SettingsFrame")
+	}
 	buf := &bytes.Buffer{}
 
+	frameType := encodeVarint(FrameSettings)
+	_, err := buf.Write(frameType)
+	if err != nil {
+		return nil, err
+	}
+
 	lengthBytes := encodeVarint(sf.Length())
-	buf.Write(lengthBytes)
+	_, err = buf.Write(lengthBytes)
+	if err != nil {
+		return nil, err
+	}
 
 	for k, v := range sf.Settings {
 		buf.Write(encodeVarint(uint64(k)))
@@ -186,17 +191,12 @@ func (sf *SettingsFrame) Encode() ([]byte, error) {
 
 func (sf *SettingsFrame) Decode(reader io.Reader) error {
 
-	length, _, err := decodeVarint(reader)
-	if err != nil {
-		return err
-	}
-
 	// Instantiating the config map
 	sf.Settings = make(map[uint16]uint64)
 
 	// Reads each key-value pair of the payload
 	bytesRead := uint64(0)
-	for bytesRead < length {
+	for bytesRead < sf.FrameLength {
 
 		key, keyLen, err := decodeVarint(reader)
 		if err != nil {
@@ -215,20 +215,34 @@ func (sf *SettingsFrame) Decode(reader io.Reader) error {
 		sf.Settings[uint16(key)] = value
 	}
 
-	if bytesRead != length {
+	if bytesRead != sf.FrameLength {
 		return fmt.Errorf("malformed Settings Frame, length field not equal frame payload size")
 	}
 
 	return nil
 }
 
-func (rf *ReservedFrame) Decode(reader io.Reader) error {
-	length, _, err := decodeVarint(reader)
-	if err != nil {
-		return err
+func (rf *ReservedFrame) Encode() ([]byte, error) {
+	if rf.FrameLength <= 0 {
+		return nil, fmt.Errorf("no length to encode ReservedFrame")
 	}
+	data := make([]byte, rf.FrameLength)
+	now := time.Now()
+	nowBinary, err := now.MarshalBinary()
+	if err != nil {
+		nowBinary = []byte("ABCDEFGHIJKLMNOPQRSTUVWXYZ123456") // default to this seed instead
+	}
+	chacha := rand.NewChaCha8([32]byte(nowBinary))
+	_, err = chacha.Read(data)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
 
-	if _, err := io.CopyN(io.Discard, reader, int64(length)); err != nil {
+func (rf *ReservedFrame) Decode(reader io.Reader) error {
+
+	if _, err := io.CopyN(io.Discard, reader, int64(rf.FrameLength)); err != nil {
 		return err
 	}
 	return nil
