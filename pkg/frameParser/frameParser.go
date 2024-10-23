@@ -67,8 +67,15 @@ func (p *FrameParser) ParseNextFrame() (Frame, error) {
 		log.Println("SettingsFrame decoded")
 
 		return settingsFrame, nil
-
-		// TODO: add GoAway Frame case here
+	case FrameGoAway:
+		goawayFrame := &GoAwayFrame{
+			FrameLength: length,
+		}
+		err = goawayFrame.Decode(p.reader)
+		if err != nil {
+			return nil, err
+		}
+		return goawayFrame, nil
 	default:
 		reservedFrame := &ReservedFrame{
 			FrameId:     frameType,

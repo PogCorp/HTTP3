@@ -221,6 +221,40 @@ func (sf *SettingsFrame) Decode(reader io.Reader) error {
 	return nil
 }
 
+func (g *GoAwayFrame) Encode() ([]byte, error) {
+	buf := &bytes.Buffer{}
+
+	frameType := encodeVarint(FrameGoAway)
+	_, err := buf.Write(frameType)
+	if err != nil {
+		return nil, err
+	}
+
+	lengthBytes := encodeVarint(g.Length())
+	_, err = buf.Write(lengthBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	id := encodeVarint(g.StreamID)
+	_, err = buf.Write(id)
+	if err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
+}
+
+func (g *GoAwayFrame) Decode(reader io.Reader) error {
+	id, _, err := decodeVarint(reader)
+	if err != nil {
+		return err
+	}
+	g.StreamID = id
+
+	return nil
+}
+
 func (rf *ReservedFrame) Encode() ([]byte, error) {
 	if rf.FrameLength <= 0 {
 		return nil, fmt.Errorf("no length to encode ReservedFrame")
@@ -259,5 +293,3 @@ func (rf *ReservedFrame) Decode(reader io.Reader) error {
 	}
 	return nil
 }
-
-// TODO: missing GoAway decoder and encoder
