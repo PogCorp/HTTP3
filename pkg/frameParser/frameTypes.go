@@ -71,7 +71,8 @@ func (sf *SettingsFrame) Length() uint64 {
 // ====== GOAWAY FRAME ======
 
 type GoAwayFrame struct {
-	StreamID uint64 // the last stream ID that the server will process
+	FrameLength uint64
+	StreamID    uint64 // the last stream ID that the server will process
 }
 
 func (gf *GoAwayFrame) Length() uint64 {
