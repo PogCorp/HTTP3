@@ -1,13 +1,13 @@
 package headers
 
 import (
-	"errors"
 	"fmt"
-	"golang.org/x/net/http/httpguts"
 	"net/http"
 	qpack "poghttp3/pkg/qpack"
 	"strconv"
 	"strings"
+
+	"golang.org/x/net/http/httpguts"
 )
 
 type Header struct {
@@ -67,18 +67,18 @@ func NewHeaderFromHeaderFields(headerFields []qpack.HeaderField, isRequest bool)
 	for _, hf := range headerFields {
 		if IsPseudo(hf) {
 			if !validField(hf.Name) {
-				return nil, errors.New(fmt.Sprintf("Invalid header field name: %s\n", hf.Name))
+				return nil, fmt.Errorf("Invalid header field name: %s\n", hf.Name)
 			}
 
 			if handlePseudoHeader, ok := pseudoHeaderHandlers[hf.Name]; ok {
 				handlePseudoHeader(header, hf)
 			} else {
-				return nil, errors.New(fmt.Sprintf("Unknown pseudo header: %s\n", hf.Name))
+				return nil, fmt.Errorf("Unknown pseudo header: %s\n", hf.Name)
 			}
 
 			valid, errorMessage := validPseudoHeader(header, isRequest)
 			if !valid {
-				return nil, errors.New(fmt.Sprintf(errorMessage, hf.Name))
+				return nil, fmt.Errorf(errorMessage, hf.Name)
 			}
 		} else {
 			if hf.Name == "content-length" {
@@ -93,14 +93,14 @@ func NewHeaderFromHeaderFields(headerFields []qpack.HeaderField, isRequest bool)
 		}
 
 		if !httpguts.ValidHeaderFieldValue(hf.Value) {
-			return nil, errors.New(fmt.Sprintf("Invalid header field value for %s: %q", hf.Name, hf.Value))
+			return nil, fmt.Errorf("Invalid header field value for %s: %q", hf.Name, hf.Value)
 		}
 	}
 
 	if len(contentLengthStr) > 0 {
 		cl, err := strconv.ParseUint(contentLengthStr, 10, 63)
 		if err != nil {
-			return nil, errors.New(fmt.Sprintf("invalid content length: %+v", err))
+			return nil, fmt.Errorf("invalid content length: %+v", err)
 		}
 		header.Header.Set("Content-Length", contentLengthStr)
 		header.ContentLength = int64(cl)

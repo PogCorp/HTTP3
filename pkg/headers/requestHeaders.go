@@ -26,7 +26,7 @@ func NewRequestFromHeaders(headerFields []qpack.HeaderField) (*http.Request, err
 
 	u, err := url.ParseRequestURI(hdr.Path)
 	if err != nil {
-		return nil, errors.New(fmt.Sprintf("Invalid parsing from request uri: %+v", err))
+		return nil, fmt.Errorf("Invalid parsing from request uri: %s", err)
 	}
 
 	return &http.Request{
