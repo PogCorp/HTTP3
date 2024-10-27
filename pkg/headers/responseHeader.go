@@ -20,7 +20,7 @@ func NewHttpResponseFromHeaderFields(headerFields []qpack.HeaderField) (*http.Re
 
 	status, err := strconv.Atoi(hdr.Status)
 	if err != nil {
-		return nil, errors.New(fmt.Sprintf("Invalid status code: %+v", err))
+		return nil, fmt.Errorf("Invalid status code: %+v", err)
 	}
 
 	return &http.Response{
