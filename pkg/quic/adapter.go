@@ -3,11 +3,20 @@ package adapter
 import (
 	"fmt"
 	"io"
+	"time"
 )
 
 type StreamType int8
 type ApplicationError int64
 type StreamId int64
+
+// TODO: add this to the adapter constructors
+type QuicConfig struct {
+	MaxBiStreams     uint64
+	MaxUniStreams    uint64
+	IdleTimeout      time.Duration
+	HandshakeTimeout time.Duration
+}
 
 type QuicServer interface {
 	Listen() error
@@ -26,6 +35,7 @@ type QuicAPI interface {
 // Streams can send data
 type QuicBiStream interface {
 	QuicUniStream
+	WriteFin()
 	Close(reason ApplicationError)
 }
 

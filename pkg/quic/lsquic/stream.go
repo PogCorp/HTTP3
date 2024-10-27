@@ -47,6 +47,10 @@ func (l *QuicBiStream) ID() adapter.StreamId {
 	return l.id
 }
 
+func (l *QuicBiStream) WriteFin() {
+	C.lsquic_stream_close(l.stream)
+}
+
 func NewQuicBiStream(lsStream *C.lsquic_stream_t, streamCtx *C.lsquic_stream_ctx_t) adapter.QuicBiStream {
 
 	id := adapter.StreamId(C.lsquic_stream_id(lsStream))

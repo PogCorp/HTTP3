@@ -26,8 +26,15 @@ func (qs *quicBiStream) Write(p []byte) (n int, err error) {
 	return qs.stream.Write(p)
 }
 
+// TODO: write function WriteFin to signal the end of writting on the stream
+func (qs *quicBiStream) WriteFin() {
+	qs.stream.Close()
+}
+
+// TODO: differentiate Cancel Read and Cancel Write
 func (qs *quicBiStream) Close(reason adapter.ApplicationError) {
 	qs.stream.CancelRead(quic.StreamErrorCode(reason))
+	qs.stream.CancelWrite(quic.StreamErrorCode(reason))
 }
 
 // ======================= UNIDIRECTIONAL STREAMS =======================

@@ -97,7 +97,7 @@ func (q *quicServer) handleConnection(ctx context.Context, conn quic.Connection)
 	defer q.quicApi.OnCanceledConn(qConn)
 	go func() {
 		for connCtx.Err() == nil {
-			stream, err := conn.AcceptUniStream(ctx)
+			stream, err := conn.AcceptUniStream(connCtx)
 			if err != nil {
 				return
 			}
@@ -106,7 +106,7 @@ func (q *quicServer) handleConnection(ctx context.Context, conn quic.Connection)
 	}()
 
 	for connCtx.Err() == nil {
-		stream, err := conn.AcceptStream(ctx)
+		stream, err := conn.AcceptStream(connCtx)
 		if err != nil {
 			log.Printf("Failed to accept stream: %v\n", err)
 			// TODO: what to do when error
