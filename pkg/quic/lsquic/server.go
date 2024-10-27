@@ -153,7 +153,7 @@ func adapterOnWrite(ls_stream *C.lsquic_stream_t, streamCtx *C.lsquic_stream_ctx
 }
 
 //export adapterOnRead
-func adapterOnRead(ls_stream *C.lsquic_stream_t, buf *C.char, bufSize C.size_t, streamCtx *C.lsquic_stream_ctx_t) {
+func adapterOnRead(ls_stream *C.lsquic_stream_t, streamCtx *C.lsquic_stream_ctx_t) {
 	lsconn := C.lsquic_stream_conn(ls_stream)
 
 	stream := NewQuicBiStream(ls_stream, streamCtx)
