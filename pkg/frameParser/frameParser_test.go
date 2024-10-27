@@ -3,14 +3,14 @@ package frameparser
 import (
 	"bytes"
 	adapter "poghttp3/pkg/qpack"
-	"poghttp3/pkg/qpack/quicgo"
+	qpack "poghttp3/pkg/qpack/quicgo"
 	"testing"
 )
 
 // TEST: integration tests that test the interaction of encoding frames and decoding from them back
 
 func TestEncodeDecodeHeadersFrame(t *testing.T) {
-	qpack := quicgo.NewQuicGoQpackEncoder()
+	qpack := qpack.NewQuicGoQpackEncoder()
 	buf := &bytes.Buffer{}
 	err := qpack.Encode(buf, adapter.HeaderField{Name: "Test Name", Value: "Test Headers"})
 	if err != nil {
@@ -18,8 +18,8 @@ func TestEncodeDecodeHeadersFrame(t *testing.T) {
 	}
 
 	hf := &HeadersFrame{
-		FrameLength: uint64(buf.Len()),
-		Headers:     buf.Bytes(),
+		Length:  uint64(buf.Len()),
+		Headers: buf.Bytes(),
 	}
 
 	encoded, err := hf.Encode()
@@ -48,8 +48,8 @@ func TestEncodeDecodeHeadersFrame(t *testing.T) {
 func TestEncodeDecodeDataFrame(t *testing.T) {
 	data := []byte("Hello, HTTP/3")
 	df := &DataFrame{
-		FrameLength: uint64(len(data)),
-		Data:        data,
+		Length: uint64(len(data)),
+		Data:   data,
 	}
 
 	encoded, err := df.Encode()
@@ -77,8 +77,8 @@ func TestEncodeDecodeDataFrame(t *testing.T) {
 
 func TestDecodeReservedFrameType(t *testing.T) {
 	reservedFrame := ReservedFrame{
-		FrameId:     0xFF,
-		FrameLength: 10,
+		FrameId: 0xFF,
+		Length:  10,
 	}
 
 	encoded, err := reservedFrame.Encode()
@@ -100,11 +100,11 @@ func TestDecodeReservedFrameType(t *testing.T) {
 		t.Fatalf("Frame Parser returned incorrect type")
 	}
 
-	if decodedReservedFrame.Length() != reservedFrame.Length() {
+	if decodedReservedFrame.Length != reservedFrame.Length {
 		t.Errorf(
 			"Decoded data length did not match: expected %d, got %v",
-			decodedReservedFrame.Length(),
-			reservedFrame.Length(),
+			decodedReservedFrame.Length,
+			reservedFrame.Length,
 		)
 	}
 }

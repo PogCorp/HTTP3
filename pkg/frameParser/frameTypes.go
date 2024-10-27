@@ -1,6 +1,7 @@
 package frameparser
 
 type FrameType = uint64
+type Setting = uint64
 
 // defining the frame types according to RFC 9114
 const (
@@ -8,6 +9,15 @@ const (
 	FrameData     FrameType = 0x00
 	FrameSettings FrameType = 0x04
 	FrameGoAway   FrameType = 0x07
+)
+
+// Available Settings for SettingsFrame
+const (
+	MaxFieldSectionSize Setting = 0x06 // section 7.2.4.1 from RFC 9114
+	// this value should be only 0 or 1, meaning deactivated and activated, respectivelly
+	Datagrams Setting = 0x33
+	// this value should be only 0 or 1, meaning deactivated and activated, respectivelly
+	ExtendedConnect Setting = 0x8
 )
 
 // Frame layout according to RFC 9114
@@ -23,8 +33,6 @@ frame{
 // basic frame interface
 
 type Frame interface {
-	Length() uint64
-	// the theoretical max defined by RFC 9000  is 2.pow(62-1), hence uint64
 }
 
 // ensure every frame type implements the frame interface
@@ -36,58 +44,36 @@ var _ Frame = (*GoAwayFrame)(nil)
 
 // ====== HEADERS FRAME ======
 
+// NOTE: this frame could have a key-value pair structure instead of just bytes
 type HeadersFrame struct {
-	FrameLength uint64
-	Headers     []byte // compressed headers using QPACK
-}
-
-func (hf *HeadersFrame) Length() uint64 {
-	return uint64(len(hf.Headers))
+	Length  uint64
+	Headers []byte // compressed headers using QPACK
 }
 
 // ====== DATA FRAME ======
 
 type DataFrame struct {
-	FrameLength uint64
-	Data        []byte
-}
-
-func (df *DataFrame) Length() uint64 {
-	return uint64(len(df.Data))
+	Length uint64
+	Data   []byte
 }
 
 // ====== SETTINGS FRAME ======
 
 type SettingsFrame struct {
-	FrameLength uint64
-	Settings    map[uint16]uint64 //key-value pairs for HTTP/3 settings
-}
-
-func (sf *SettingsFrame) Length() uint64 {
-	return sf.FrameLength
-	//each setting is 2 bytes (the key) plus 8 bytes (value)
+	Length   uint64
+	Settings map[Setting]uint64 //key-value pairs for HTTP/3 settings
 }
 
 // ====== GOAWAY FRAME ======
 
 type GoAwayFrame struct {
-	FrameLength uint64
-	StreamID    uint64 // the last stream ID that the server will process
-}
-
-func (gf *GoAwayFrame) Length() uint64 {
-	return 8 // this is the fixed length for the GOAWAY frame, since it represnts a stream StreamID
-	// RFC 9000: "A stream ID is a 62 bit integer".
-	//The other two bits are the stream identifiers
+	Length   uint64
+	StreamID uint64 // the last stream ID that the server will process
 }
 
 // ====== Reserved FRAMES ======
 
 type ReservedFrame struct {
-	FrameId     FrameType
-	FrameLength uint64
-}
-
-func (rf *ReservedFrame) Length() uint64 {
-	return rf.FrameLength
+	FrameId FrameType
+	Length  uint64
 }

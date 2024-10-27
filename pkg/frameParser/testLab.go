@@ -80,7 +80,7 @@ func testDataFrame() {
 func testSettingsFrame() {
 	// create SettingsFrame with key values pairs
 	originalFrame := &SettingsFrame{
-		Settings: map[uint16]uint64{
+		Settings: map[uint64]uint64{
 			0x1: 0x100,
 			0x2: 0x200,
 		},

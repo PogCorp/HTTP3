@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
+	qpack "poghttp3/pkg/qpack"
+	adapter "poghttp3/pkg/quic"
 )
 
 // varint encoding is used by RFC 9000
@@ -87,7 +89,44 @@ func decodeVarint(r io.Reader) (value uint64, lenght uint64, err error) {
 	return 0, 0, fmt.Errorf("invalid varint encoding")
 }
 
+func encodedLenght(n uint64) (lenght uint64) {
+	switch {
+	case n < 1<<6:
+		return 1
+
+	case n < 1<<14:
+		return 2
+
+	case n < 1<<30:
+		return 4
+
+	default:
+		return 8
+	}
+}
+
+// -------------------- STREAM TYPE EXTRACTOR ----------------------
+func StreamTypeExtractor(r io.Reader) (adapter.StreamType, error) {
+	v, _, err := decodeVarint(r)
+	return adapter.StreamType(v), err
+}
+
 // -------------------- HEADERS FRAME OPERATIONS ----------------------
+
+func NewHeadersFrame(headers qpack.HeaderField, q qpack.QpackApi) (*HeadersFrame, error) {
+	buffer := bytes.Buffer{}
+	err := q.Encode(&buffer, headers)
+	if err != nil {
+		return nil, err
+	}
+	frame := HeadersFrame{
+		Length:  uint64(buffer.Len()),
+		Headers: buffer.Bytes(),
+	}
+
+	return &frame, nil
+}
+
 func (hf *HeadersFrame) Encode() ([]byte, error) {
 	buf := &bytes.Buffer{}
 
@@ -99,7 +138,7 @@ func (hf *HeadersFrame) Encode() ([]byte, error) {
 	}
 
 	// encodes the payload length using varint
-	lengthBytes := encodeVarint(hf.Length())
+	lengthBytes := encodeVarint(hf.Length)
 	buf.Write(lengthBytes)
 
 	// Writes the compressed headers
@@ -111,7 +150,7 @@ func (hf *HeadersFrame) Encode() ([]byte, error) {
 func (hf *HeadersFrame) Decode(reader io.Reader) error {
 
 	// Reads the payload
-	hf.Headers = make([]byte, hf.FrameLength)
+	hf.Headers = make([]byte, hf.Length)
 	if _, err := io.ReadFull(reader, hf.Headers); err != nil {
 		return err
 	}
@@ -125,7 +164,7 @@ func (hf *HeadersFrame) Decode(reader io.Reader) error {
 
 // -------------------- DATA FRAME OPERATIONS ----------------------
 func (df *DataFrame) Encode() ([]byte, error) {
-	if df.FrameLength <= 0 {
+	if df.Length <= 0 {
 		return nil, fmt.Errorf("no payload to encode DataFrame")
 	}
 
@@ -137,7 +176,7 @@ func (df *DataFrame) Encode() ([]byte, error) {
 		return nil, err
 	}
 
-	lengthBytes := encodeVarint(df.Length())
+	lengthBytes := encodeVarint(df.Length)
 	_, err = buf.Write(lengthBytes)
 	if err != nil {
 		return nil, err
@@ -153,7 +192,7 @@ func (df *DataFrame) Encode() ([]byte, error) {
 
 func (df *DataFrame) Decode(reader io.Reader) error {
 
-	df.Data = make([]byte, df.FrameLength)
+	df.Data = make([]byte, df.Length)
 	if _, err := io.ReadFull(reader, df.Data); err != nil {
 		return err
 	}
@@ -162,6 +201,25 @@ func (df *DataFrame) Decode(reader io.Reader) error {
 }
 
 // -------------------- SETTINGS FRAME OPERATIONS ----------------------
+
+func NewSettingsFrame(settings map[Setting]uint64) *SettingsFrame {
+	var length uint64 = 0
+
+	for key, value := range settings {
+		keyLen := encodedLenght(key)
+		length = length + keyLen
+		valueLen := encodedLenght(value)
+		length = length + valueLen
+	}
+
+	frame := SettingsFrame{
+		Settings: settings,
+		Length:   length,
+	}
+
+	return &frame
+}
+
 func (sf *SettingsFrame) Encode() ([]byte, error) {
 	if len(sf.Settings) <= 0 {
 		return nil, fmt.Errorf("no settings to encode SettingsFrame")
@@ -174,7 +232,7 @@ func (sf *SettingsFrame) Encode() ([]byte, error) {
 		return nil, err
 	}
 
-	lengthBytes := encodeVarint(sf.Length())
+	lengthBytes := encodeVarint(sf.Length)
 	_, err = buf.Write(lengthBytes)
 	if err != nil {
 		return nil, err
@@ -191,11 +249,11 @@ func (sf *SettingsFrame) Encode() ([]byte, error) {
 func (sf *SettingsFrame) Decode(reader io.Reader) error {
 
 	// Instantiating the config map
-	sf.Settings = make(map[uint16]uint64)
+	sf.Settings = make(map[uint64]uint64)
 
 	// Reads each key-value pair of the payload
 	bytesRead := uint64(0)
-	for bytesRead < sf.FrameLength {
+	for bytesRead < sf.Length {
 
 		key, keyLen, err := decodeVarint(reader)
 		if err != nil {
@@ -211,10 +269,10 @@ func (sf *SettingsFrame) Decode(reader io.Reader) error {
 		bytesRead += valueLen
 
 		// Stores the key-value pay in the map
-		sf.Settings[uint16(key)] = value
+		sf.Settings[key] = value
 	}
 
-	if bytesRead != sf.FrameLength {
+	if bytesRead != sf.Length {
 		return fmt.Errorf("malformed Settings Frame, length field not equal frame payload size")
 	}
 
@@ -230,7 +288,7 @@ func (g *GoAwayFrame) Encode() ([]byte, error) {
 		return nil, err
 	}
 
-	lengthBytes := encodeVarint(g.Length())
+	lengthBytes := encodeVarint(g.Length)
 	_, err = buf.Write(lengthBytes)
 	if err != nil {
 		return nil, err
@@ -256,10 +314,10 @@ func (g *GoAwayFrame) Decode(reader io.Reader) error {
 }
 
 func (rf *ReservedFrame) Encode() ([]byte, error) {
-	if rf.FrameLength <= 0 {
+	if rf.Length <= 0 {
 		return nil, fmt.Errorf("no length to encode ReservedFrame")
 	}
-	data := make([]byte, rf.FrameLength)
+	data := make([]byte, rf.Length)
 	buf := &bytes.Buffer{}
 
 	frameType := encodeVarint(rf.FrameId)
@@ -268,7 +326,7 @@ func (rf *ReservedFrame) Encode() ([]byte, error) {
 		return nil, err
 	}
 
-	lengthBytes := encodeVarint(rf.Length())
+	lengthBytes := encodeVarint(rf.Length)
 	_, err = buf.Write(lengthBytes)
 	if err != nil {
 		return nil, err
@@ -288,7 +346,7 @@ func (rf *ReservedFrame) Encode() ([]byte, error) {
 
 func (rf *ReservedFrame) Decode(reader io.Reader) error {
 
-	if _, err := io.CopyN(io.Discard, reader, int64(rf.FrameLength)); err != nil {
+	if _, err := io.CopyN(io.Discard, reader, int64(rf.Length)); err != nil {
 		return err
 	}
 	return nil
