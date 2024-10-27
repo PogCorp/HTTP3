@@ -1,4 +1,4 @@
-package quicgo
+package qpack
 
 import (
 	"io"

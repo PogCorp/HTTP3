@@ -4,6 +4,7 @@
 
 #include "adapter.h"
 #include "logger.h"
+#include "lsquic.h"
 #include "server.h"
 
 #ifndef ADAPTER
