@@ -8,6 +8,7 @@ import (
 type connection struct {
 	receivedControl      atomic.Bool
 	receivedQPackEncoder atomic.Bool
+	settings             Settings
 
 	decodeStream  adapter.QuicUniStream
 	controlStream adapter.QuicUniStream

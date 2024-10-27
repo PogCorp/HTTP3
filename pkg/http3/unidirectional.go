@@ -9,6 +9,19 @@ import (
 func (s *Server) handleControlStream(conn adapter.QuicConn, id adapter.StreamId, reader io.Reader) {
 	parser := frameparser.NewFrameParser(reader)
 	frame, err := parser.ParseNextFrame()
+
+	httpConn, ok := s.connections[conn]
+	if !ok {
+		if s.logger != nil {
+			s.logger.Debug(
+				"failed to load http connection whist receiving control stream",
+				"stream ID", id, "conn ID", conn.String(), "error", err,
+			)
+		}
+		conn.Close(InternalError)
+		return
+	}
+
 	if err != nil {
 		if s.logger != nil {
 			s.logger.Debug("in control stream failed to read frame", "stream ID", id, "error", err)
@@ -28,14 +41,14 @@ func (s *Server) handleControlStream(conn adapter.QuicConn, id adapter.StreamId,
 	for setting, value := range settings.Settings {
 		switch setting {
 		case frameparser.MaxFieldSectionSize:
-			s.settings.MaxFieldSectionSize = value
+			httpConn.settings.MaxFieldSectionSize = value
 		case frameparser.Datagrams:
 			if value == 1 {
-				s.settings.Datagrams = false // NOTE: allways refuse for now
+				httpConn.settings.Datagrams = false // NOTE: allways refuse for now
 			}
 		case frameparser.ExtendedConnect:
 			if value == 1 {
-				s.settings.ExtendedConnect = true
+				httpConn.settings.ExtendedConnect = true
 			}
 		}
 	}
