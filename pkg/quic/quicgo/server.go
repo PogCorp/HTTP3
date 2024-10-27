@@ -52,6 +52,24 @@ func NewQuicGoServer(host, keyfile, certfile string, api adapter.QuicAPI) (adapt
 	}, nil
 }
 
+func NewQuicGoServerTLS(host string, tlsconfig *tls.Config, api adapter.QuicAPI) (adapter.QuicServer, error) {
+	if host == "" {
+		host = ":https"
+	}
+
+	udpAddr, err := net.ResolveUDPAddr("udp", host)
+	if err != nil {
+		return nil, err
+	}
+
+	return &quicServer{
+		quicApi:     api,
+		tlsConfig:   tlsconfig,
+		tracerToCid: make(map[quic.ConnectionTracingID]quic.ConnectionID),
+		udpAddr:     *udpAddr,
+	}, nil
+}
+
 func (q *quicServer) Listen() error {
 
 	config := &quic.Config{

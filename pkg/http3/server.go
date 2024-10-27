@@ -16,6 +16,8 @@ const (
 	QPackDecoder  adapter.StreamType = 0x03
 )
 
+const ALPNH3Protocol = "h3"
+
 type Settings struct {
 	Datagrams           bool
 	ExtendedConnect     bool
@@ -23,14 +25,22 @@ type Settings struct {
 }
 
 type Server struct {
-	Addr       string
-	Handler    http.Handler
-	QuicConfig adapter.QuicConfig
-	settings   Settings
-	decoder    qpack.QpackApi
+	Addr     string
+	Handler  http.Handler
+	settings Settings
+	decoder  qpack.QpackApi
 
 	logger      *slog.Logger
 	connections map[adapter.QuicConn]*connection
+}
+
+func NewServer(addr string, decoder qpack.QpackApi, handler http.Handler) *Server {
+	return &Server{
+		Addr:    addr,
+		Handler: handler,
+		decoder: decoder,
+		logger:  slog.Default(),
+	}
 }
 
 func (s *Server) OnNewUniStream(conn adapter.QuicConn, id adapter.StreamId) {
