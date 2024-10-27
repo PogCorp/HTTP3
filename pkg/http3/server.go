@@ -25,10 +25,9 @@ type Settings struct {
 }
 
 type Server struct {
-	Addr     string
-	Handler  http.Handler
-	settings Settings
-	decoder  qpack.QpackApi
+	Addr    string
+	Handler http.Handler
+	decoder qpack.QpackApi
 
 	logger      *slog.Logger
 	connections map[adapter.QuicConn]*connection
@@ -36,10 +35,11 @@ type Server struct {
 
 func NewServer(addr string, decoder qpack.QpackApi, handler http.Handler) *Server {
 	return &Server{
-		Addr:    addr,
-		Handler: handler,
-		decoder: decoder,
-		logger:  slog.Default(),
+		Addr:        addr,
+		Handler:     handler,
+		decoder:     decoder,
+		logger:      slog.Default(),
+		connections: make(map[adapter.QuicConn]*connection),
 	}
 }
 
