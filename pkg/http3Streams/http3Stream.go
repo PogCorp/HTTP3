@@ -14,26 +14,19 @@ import (
 
 type Http3Stream interface{
 	SendHeaders(headers http.Header) (int, error) //send a generic frame type
-	SendBody(data []byte) (int, error)	
+	SendBody(data []byte) (int, error)
+	// trailers are the same as headers, but sent after the body.
+	// we can reuse the SendHeaders function for them
 //	Close() error
 
 }
 
 type streamState string
 
-// not yet implemented the state transitions
-const(
-	IdleStream streamState     = "idle"
-	OpenStream streamState     = "open"
-	HalfOpenStream streamState = "halfOpen"
-	ClosedStream streamState   = "closed"
-)
+
 
 type RequestStream struct{
-	//headers http.Header
-	//trailers http.Header
 	QuicStream adapter.QuicBiStream //RequestStream uses bidirectional stream
-	State streamState
 }
 
 
