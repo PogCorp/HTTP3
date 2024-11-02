@@ -22,6 +22,7 @@ type Header struct {
 	Protocol      string
 }
 
+// all header fields must be lowercase
 func validField(fieldName string) bool {
 	return strings.ToLower(fieldName) == fieldName
 }

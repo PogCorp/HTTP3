@@ -13,11 +13,25 @@ const (
 
 // Available Settings for SettingsFrame
 const (
+	// =============== HTTP3 ===============
 	MaxFieldSectionSize Setting = 0x06 // section 7.2.4.1 from RFC 9114
+
+	// =============== Extensions ===============
 	// this value should be only 0 or 1, meaning deactivated and activated, respectivelly
 	Datagrams Setting = 0x33
 	// this value should be only 0 or 1, meaning deactivated and activated, respectivelly
 	ExtendedConnect Setting = 0x8
+
+	// =============== QPACK ===============
+	QpackMaxTableCapacity = 0x01
+	QpackBlockedStreams   = 0x07
+
+	// =============== IANA Rerserved ===============
+	H2SettingsIdEnablePush           = 0x2
+	H2SettingsIdMaxConcurrentStreams = 0x3
+	H2SettingsIdInitialWindowSize    = 0x4
+	H2SettingsIdMaxFrameSize         = 0x5
+	// the values of this IANA section must be treated as a SETTINGS_ERROR (section 7.2.4.1 RFC 9114)
 )
 
 // Frame layout according to RFC 9114
