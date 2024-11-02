@@ -37,6 +37,8 @@ type QuicBiStream interface {
 	QuicUniStream
 	WriteFin()
 	Close(reason ApplicationError)
+	CloseRead(reason ApplicationError)
+	CloseWrite(reason ApplicationError)
 }
 
 type QuicUniStream interface {
