@@ -2,6 +2,7 @@ package frameparser
 
 import (
 	"bytes"
+	"io"
 	adapter "poghttp3/pkg/qpack"
 	qpack "poghttp3/pkg/qpack/quicgo"
 	"reflect"
@@ -71,6 +72,11 @@ func TestEncodeDecodeDataFrame(t *testing.T) {
 		t.Fatalf("Frame Parser returned incorrect type")
 	}
 
+	decodedDataFrame.Data, err = io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("failed to read bytes from Data Frame, err: %s", err)
+	}
+
 	if !bytes.Equal(df.Data, decodedDataFrame.Data) {
 		t.Errorf("Decoded data do not match: expected %v, got %v", df.Data, decodedDataFrame.Data)
 	}
@@ -127,7 +133,16 @@ func TestDecodeDataFrameInsufficientData(t *testing.T) {
 	reader := bytes.NewReader(buf.Bytes())
 
 	parser := NewFrameParser(reader)
-	_, err = parser.ParseNextFrame()
+	frame, err := parser.ParseNextFrame()
+	if err != nil {
+		t.Fatalf("Failed to decode type and lenght of Data Frame")
+	}
+	realFrame, ok := frame.(*DataFrame)
+	if !ok {
+		t.Fatalf("parser return Frame different from Data Frame")
+	}
+
+	_, err = io.CopyN(io.Discard, reader, int64(realFrame.Length))
 	if err == nil {
 		t.Fatalf("Expected error when decoding DataFrame with EOF signal")
 	}
@@ -220,7 +235,36 @@ func TestDecodeDataFrame(t *testing.T) {
 			}},
 	}
 
-	testFrames(t, testData)
+	testDataFrames(t, testData)
+}
+
+func testDataFrames(t *testing.T, tests []struct {
+	input []byte
+	want  DataFrame
+}) {
+	for _, test := range tests {
+		reader := bytes.NewReader(test.input)
+		parser := NewFrameParser(reader)
+		frame, err := parser.ParseNextFrame()
+		if err != nil {
+			t.Fatalf("Failed to decode Data Frame: err: %s", err)
+		}
+		realFrame, ok := frame.(*DataFrame)
+		if !ok {
+			t.Fatalf("Frame Parser returned incorrect type")
+		}
+
+		// NOTE: passing this responsability is ugly, but in the required timeframe this will do
+		realFrame.Data, err = io.ReadAll(reader)
+		if err != nil {
+			t.Fatalf("failed to read bytes from Data Frame, err: %s", err)
+		}
+
+		if equal := reflect.DeepEqual(*realFrame, test.want); !equal {
+			t.Fatalf("expected %+v, got %+v", test.want, *realFrame)
+		}
+
+	}
 }
 
 func testFrames[T Frame](t *testing.T, tests []struct {
