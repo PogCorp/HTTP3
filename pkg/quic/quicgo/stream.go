@@ -37,6 +37,14 @@ func (qs *quicBiStream) Close(reason adapter.ApplicationError) {
 	qs.stream.CancelWrite(quic.StreamErrorCode(reason))
 }
 
+func (qs *quicBiStream) CloseRead(reason adapter.ApplicationError) {
+	qs.stream.CancelRead(quic.StreamErrorCode(reason))
+}
+
+func (qs *quicBiStream) CloseWrite(reason adapter.ApplicationError) {
+	qs.stream.CancelWrite(quic.StreamErrorCode(reason))
+}
+
 // ======================= UNIDIRECTIONAL STREAMS =======================
 
 type quicUniStream struct {
