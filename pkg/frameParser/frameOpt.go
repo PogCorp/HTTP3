@@ -191,12 +191,8 @@ func (df *DataFrame) Encode() ([]byte, error) {
 }
 
 func (df *DataFrame) Decode(reader io.Reader) error {
-
-	df.Data = make([]byte, df.Length)
-	if _, err := io.ReadFull(reader, df.Data); err != nil {
-		return err
-	}
-
+	// NOTE: not reading body here, delegating to user
+	//		to read stream from there
 	return nil
 }
 

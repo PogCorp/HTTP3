@@ -54,7 +54,6 @@ func (p *FrameParser) ParseNextFrame() (Frame, error) {
 		if err := dataFrame.Decode(p.reader); err != nil {
 			return nil, fmt.Errorf("failed to decode DataFrame, got err: %w", err)
 		}
-		log.Printf("Decoded DataFrame: %s\n", dataFrame.Data)
 
 		return dataFrame, nil
 	case FrameSettings:
