@@ -20,7 +20,7 @@ type responseWriter struct{
 	writen bool
 	contentLength int64
 	bytesWriten int64
-	buffer bytes.Buffer
+	Buffer bytes.Buffer
 }
 
 
@@ -104,20 +104,42 @@ func (w *responseWriter) Write(data []byte) (int, error){
 	}
 	
 
-	// only send the data when the buffer hits a certain size, to enhance performance
+	// only send the data when the Buffer hits a certain size, to enhance performance
 	// this 4096 size is placeholder for now
-	const maxDataFrameSize = 1
-	w.buffer.Write(data)
+	const maxDataFrameSize = 4096
+	w.Buffer.Write(data)
 	
 	// divide it in chunks and send
-	for w.buffer.Len() >= maxDataFrameSize{
-		chunk := w.buffer.Next(maxDataFrameSize) // gets the slice defined by maxFrameSize
+	for w.Buffer.Len() >= maxDataFrameSize{
+		chunk := w.Buffer.Next(maxDataFrameSize) // gets the slice defined by maxFrameSize
 		if _, err := w.stream.SendBody(chunk); err != nil{
 			return 0, fmt.Errorf("Failed to send data chunk: %w", err)
 		}
 	}
-	// TODO: Implement a flush method to just send data, regardless of the buffer size
 	
+	// there may still be body data that could not form a whole chunk, so we just send the remaining of it
+	w.FlushData()
+
+	// Headers sent, body sent. Now, if there are trailers, we send them in the end
+	if len(w.trailers) > 0{
+		if _, err := w.stream.SendHeaders(w.trailers); err != nil{
+			return 0, fmt.Errorf("Failed to send trailers: %w", err)
+		}
+	}
+
 	return len(data), nil
 
 }
+
+func (w * responseWriter) FlushData() error{
+	//if the remaining of the body is smaller than the chunk size, just 
+	//push them to the stream.
+	if w.Buffer.Len() > 0{
+		remainingData := w.Buffer.Next(w.Buffer.Len())
+		if _, err := w.stream.SendBody(remainingData); err != nil{
+			return fmt.Errorf("Failed to send the remaining message body: %w", err)
+		}
+	}
+	return nil
+}
+
