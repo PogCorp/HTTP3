@@ -27,9 +27,6 @@ func NewRequestBody(
 	if contentLength <= 0 {
 		return nil, fmt.Errorf("received non-positive contentLength in Request Body Constructor")
 	}
-	//if stream == nil || biStream == nil {
-	//	return nil, fmt.Errorf("received nil stream")
-	//}
 
 	return &requestBody{
 		biStream:      biStream,
