@@ -2,9 +2,12 @@ package http3streams
 
 import (
 	"bytes"
+	"errors"
+	"go/parser"
+
 	//"errors"
 	"fmt"
-	//"io"
+	"io"
 	"net/http"
 	frame "poghttp3/pkg/frameParser"
 	qpackApi "poghttp3/pkg/qpack"
@@ -17,17 +20,16 @@ type Http3Stream interface{
 	SendBody(data []byte) (int, error)
 	// trailers are the same as headers, but sent after the body.
 	// we can reuse the SendHeaders function for them
-//	Close() error
+	Close()
+	ReadData()([]frame.Frame, error)
 
 }
-
-type streamState string
-
 
 
 type RequestStream struct{
 	QuicStream adapter.QuicBiStream //RequestStream uses bidirectional stream
 }
+
 
 
 // THE RESPONSE WRITER CREATES THE FRAMES (HIGH LEVEL). THE HTTPSTREAMS ENCODE THEM.
@@ -90,6 +92,39 @@ func (s *RequestStream) SendBody(data []byte) (int, error){
 
 	return bytesSent, err
 }
+
+func (s *RequestStream) Close(reason adapter.ApplicationError){
+	s.QuicStream.Close(reason)
+}
+
+// ======== Reading Data ========= //
+// to read data we must implement the Read() method so that BiStream implements the io.Reader interface
+// wich is the used as the frame parser parameter. Hence why we define the quicBiStreamReader structure
+
+
+
+func (s *RequestStream) ReadData(reader io.Reader) ([]frame.Frame, error){
+	// receive raw data from the quic streams
+	// uses the frame parser to decode each frame, and returns them
+	parser := frame.NewFrameParser(reader)
+	var frames []frame.Frame
+
+	for{
+		parsedFrame, err := parser.ParseNextFrame()
+		if err != nil{
+			if errors.Is(err, io.EOF){
+				// end of the readers, just return
+				return frames, nil
+			}
+			//else, some other error happened while decoding
+			return nil, fmt.Errorf("Error decoding HTTP/3 frames: %w", err)
+		}
+		// collecting the decoded frames
+		frames = append(frames, parsedFrame)
+	}	
+}
+
+
 
 
 
