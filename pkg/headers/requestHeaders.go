@@ -9,7 +9,7 @@ import (
 )
 
 func NewRequestFromHeaders(headerFields []qpack.HeaderField) (*http.Request, error) {
-	hdr, err := parseHeaderFromHeaderFields(headerFields, true)
+	hdr, err := parseHeaderFromHeaderFields(headerFields)
 	if err != nil {
 		return nil, err
 	}
