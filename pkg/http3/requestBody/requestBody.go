@@ -3,7 +3,7 @@ package requestbody
 import (
 	"fmt"
 	"io"
-	"poghttp3/pkg/http3"
+	http3errors "poghttp3/pkg/http3/errors"
 	adapter "poghttp3/pkg/quic"
 	"sync"
 )
@@ -12,8 +12,8 @@ type requestBody struct {
 	biStream adapter.QuicBiStream
 	stream   io.Reader
 	// invariant, contentLength must be positive
-	contentLength    int
-	bytesToBeRead    int
+	contentLength    int64
+	bytesToBeRead    int64
 	violationHandler func()
 }
 
@@ -22,7 +22,7 @@ var _ RequestBody = (*requestBody)(nil)
 func NewRequestBody(
 	biStream adapter.QuicBiStream,
 	stream io.Reader,
-	contentLength int,
+	contentLength int64,
 ) (RequestBody, error) {
 	if contentLength <= 0 {
 		return nil, fmt.Errorf("received non-positive contentLength in Request Body Constructor")
@@ -34,13 +34,13 @@ func NewRequestBody(
 		contentLength: contentLength,
 		bytesToBeRead: contentLength,
 		violationHandler: sync.OnceFunc(func() {
-			biStream.Close(http3.MessageError)
+			biStream.Close(http3errors.MessageError)
 		}),
 	}, nil
 }
 
 func (rb *requestBody) Close() error {
-	rb.biStream.CloseRead(http3.RequestCancelled)
+	rb.biStream.CloseRead(http3errors.RequestCancelled)
 	return nil
 }
 
@@ -51,15 +51,12 @@ func (rb *requestBody) Read(b []byte) (n int, err error) {
 		return 0, fmt.Errorf("Content Length Violated in Request Body")
 	}
 
-	bufSize := len(b)
-	if bufSize > rb.bytesToBeRead {
-		bufSize = rb.bytesToBeRead
-	}
+	bufSize := min(int64(len(b)), rb.bytesToBeRead)
 
 	newBuff := b[:bufSize]
 	n, err = rb.stream.Read(newBuff)
 
-	rb.bytesToBeRead -= n
+	rb.bytesToBeRead -= int64(n)
 
 	if rb.violatedContentLength() {
 		rb.violationHandler()

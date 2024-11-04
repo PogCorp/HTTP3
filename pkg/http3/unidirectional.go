@@ -3,6 +3,7 @@ package http3
 import (
 	"io"
 	frameparser "poghttp3/pkg/frameParser"
+	http3errors "poghttp3/pkg/http3/errors"
 	adapter "poghttp3/pkg/quic"
 )
 
@@ -18,7 +19,7 @@ func (s *Server) handleControlStream(conn adapter.QuicConn, id adapter.StreamId,
 				"stream ID", id, "conn ID", conn.String(), "error", err,
 			)
 		}
-		conn.Close(InternalError)
+		conn.Close(http3errors.InternalError)
 		return
 	}
 
@@ -26,7 +27,7 @@ func (s *Server) handleControlStream(conn adapter.QuicConn, id adapter.StreamId,
 		if s.logger != nil {
 			s.logger.Debug("in control stream failed to read frame", "stream ID", id, "error", err)
 		}
-		conn.Close(SettingsError)
+		conn.Close(http3errors.SettingsError)
 		return
 	}
 
@@ -35,7 +36,7 @@ func (s *Server) handleControlStream(conn adapter.QuicConn, id adapter.StreamId,
 		if s.logger != nil {
 			s.logger.Debug("in control stream, first frame is not settings frame", "stream ID", id, "error", err)
 		}
-		conn.Close(MissingSettings)
+		conn.Close(http3errors.MissingSettings)
 	}
 
 	for setting, value := range settings.Settings {
