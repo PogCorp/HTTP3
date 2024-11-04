@@ -36,26 +36,14 @@ func (hdr *Header) IsResponseHeader() bool {
 	return hdr.Status != ""
 }
 
-func validPseudoHeader(h *Header, isRequest bool) (bool, error) {
-	// only valid pseudo header in response (see section 4.3.2 of RFC 9114)
-	isResponsePseudoHeader := (h.Status != "")
-
-	if isRequest && isResponsePseudoHeader {
-		return false, fmt.Errorf("Got pseudoheader ':status' in Request")
-	}
-	if !isRequest && !isResponsePseudoHeader {
-		return false, fmt.Errorf("Got Request pseudo header in Response")
-	}
-
-	return true, nil
-}
-
-func parseHeaderFromHeaderFields(headerFields []qpack.HeaderField, isRequest bool) (*Header, error) {
+func parseHeaderFromHeaderFields(headerFields []qpack.HeaderField) (*Header, error) {
 	header := &Header{
 		Header: make(http.Header, len(headerFields)),
 	}
 
 	readContentLength := false
+	// validates that pseudo headers come before regular headers
+	pseudoHeaderEnd := false
 
 	for _, hf := range headerFields {
 		if !validHeaderField(hf.Name) {
@@ -67,9 +55,8 @@ func parseHeaderFromHeaderFields(headerFields []qpack.HeaderField, isRequest boo
 		}
 
 		if IsPseudoHeader(hf) {
-			ok, err := validPseudoHeader(header, isRequest)
-			if !ok {
-				return nil, fmt.Errorf("%s, Field Name: %s", err, hf.Name)
+			if pseudoHeaderEnd {
+				return nil, fmt.Errorf("received pseudo header %s after regular header", hf.Name)
 			}
 
 			switch hf.Name {
@@ -84,12 +71,13 @@ func parseHeaderFromHeaderFields(headerFields []qpack.HeaderField, isRequest boo
 			case ":scheme":
 				header.Scheme = hf.Value
 			case ":status":
-				header.Status = hf.Value
+				return nil, fmt.Errorf("received :status pseudo header")
 			default:
 				return nil, fmt.Errorf("undefined pseudo header: %s", hf.Name)
 			}
 
 		} else {
+			pseudoHeaderEnd = true
 			if !httpguts.ValidHeaderFieldName(hf.Name) {
 				return nil, fmt.Errorf("Got header field name for %s: %s", hf.Name, hf.Value)
 			}
