@@ -51,6 +51,14 @@ func (l *QuicBiStream) WriteFin() {
 	C.lsquic_stream_close(l.stream)
 }
 
+func (l *QuicBiStream) CloseRead(reason adapter.ApplicationError) {
+	C.lsquic_stream_shutdown(l.stream, 0)
+}
+
+func (l *QuicBiStream) CloseWrite(reason adapter.ApplicationError) {
+	C.lsquic_stream_shutdown(l.stream, 1)
+}
+
 func NewQuicBiStream(lsStream *C.lsquic_stream_t, streamCtx *C.lsquic_stream_ctx_t) adapter.QuicBiStream {
 
 	id := adapter.StreamId(C.lsquic_stream_id(lsStream))
