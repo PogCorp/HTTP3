@@ -1,4 +1,4 @@
-package http3
+package http3errors
 
 const (
 	NoError                  = 0x100

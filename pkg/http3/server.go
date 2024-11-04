@@ -5,6 +5,9 @@ import (
 	"log/slog"
 	"net/http"
 	frames "poghttp3/pkg/frameParser"
+	"poghttp3/pkg/headers"
+	http3errors "poghttp3/pkg/http3/errors"
+	requestbody "poghttp3/pkg/http3/requestBody"
 	qpack "poghttp3/pkg/qpack"
 	adapter "poghttp3/pkg/quic"
 )
@@ -65,19 +68,19 @@ func (s *Server) OnReadUniStream(conn adapter.QuicConn, id adapter.StreamId, rea
 	switch streamType {
 	case ControlStream:
 		if swapped := serverConn.receivedControl.CompareAndSwap(false, true); !swapped {
-			conn.Close(StreamCreationError)
+			conn.Close(http3errors.StreamCreationError)
 			return
 		}
 		s.handleControlStream(conn, id, reader)
 	case QPackEncoder:
 		if swapped := serverConn.receivedQPackEncoder.CompareAndSwap(false, true); !swapped {
-			conn.Close(StreamCreationError)
+			conn.Close(http3errors.StreamCreationError)
 			return
 		}
 		// TODO: dynamic table management should be arround here
 		return
 	case PushStream: // client send a push stream, which is not permited, only the server can
-		conn.Close(StreamCreationError)
+		conn.Close(http3errors.StreamCreationError)
 		return
 	}
 }
@@ -95,7 +98,7 @@ func (s *Server) OnReadBiStream(conn adapter.QuicConn, stream adapter.QuicBiStre
 		if s.logger != nil {
 			s.logger.Debug("in bidirectional stream failed to read frame", "stream ID", stream.ID())
 		}
-		stream.Close(FrameError)
+		stream.Close(http3errors.FrameError)
 		return
 	}
 	headerFrame, ok := frame.(*frames.HeadersFrame)
@@ -103,19 +106,68 @@ func (s *Server) OnReadBiStream(conn adapter.QuicConn, stream adapter.QuicBiStre
 		if s.logger != nil {
 			s.logger.Debug("in bidirectional stream failed to read frame", "stream ID", stream.ID())
 		}
-		stream.Close(FrameError)
+		stream.Close(http3errors.FrameError)
 		return
 	}
 
-	// TODO: use the result with requestFromHeader to convert this into a *http.Request
-	_, err = s.decoder.Decode(headerFrame.Headers)
+	hdr, err := s.decoder.Decode(headerFrame.Headers)
 	if err != nil {
 		if s.logger != nil {
 			s.logger.Debug("in bidirectional failed to decode header frame", "stream ID", stream.ID(), "error", err)
 		}
-		conn.Close(GeneralProtocolError)
+		conn.Close(http3errors.GeneralProtocolError)
 		return
 	}
+
+	request, err := headers.NewRequestFromHeaders(hdr)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Debug("failed to parse request", "stream ID", stream.ID(), "error", err)
+		}
+		stream.Close(http3errors.MessageError)
+		return
+	}
+
+	request.RemoteAddr = conn.RemoteAddress()
+	contentLength := int64(0)
+	if _, ok := request.Header["Content-Length"]; ok && request.ContentLength >= 0 {
+		contentLength = request.ContentLength
+	}
+
+	// TODO: configure http3 stream
+
+	var body io.ReadCloser
+	switch true {
+	case contentLength == 0:
+		// TODO: add io.ReaderCloser that does nothing
+	case contentLength > 0:
+		body, err = requestbody.NewRequestBody(stream, reader, contentLength)
+		if err != nil {
+			panic("request body received non-positive value in positive switch clause")
+		}
+	case contentLength < 0:
+		if s.logger != nil {
+			s.logger.Debug("received negative content length", "stream ID", stream.ID(), "error", err)
+		}
+		stream.Close(http3errors.GeneralProtocolError)
+		return
+	}
+
+	request.Body = body
+
+	if s.logger != nil {
+		s.logger.Debug(
+			"handling request",
+			"stream ID", stream.ID(),
+			"method", request.Method,
+			"uri", request.RequestURI,
+		)
+	}
+
+	// TODO: configure response writter
+
+	stream.CloseRead(http3errors.NoError) // similar to shutdown(fd, SHUT_RD)
+	stream.WriteFin()
 }
 
 func (s *Server) OnCanceledConn(conn adapter.QuicConn) {
