@@ -1,7 +1,6 @@
 package headers
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -10,7 +9,7 @@ import (
 )
 
 func NewRequestFromHeaders(headerFields []qpack.HeaderField) (*http.Request, error) {
-	hdr, err := NewHeaderFromHeaderFields(headerFields, true)
+	hdr, err := parseHeaderFromHeaderFields(headerFields, true)
 	if err != nil {
 		return nil, err
 	}
@@ -21,7 +20,11 @@ func NewRequestFromHeaders(headerFields []qpack.HeaderField) (*http.Request, err
 	}
 
 	if len(hdr.Path) == 0 || len(hdr.Authority) == 0 || len(hdr.Method) == 0 {
-		return nil, errors.New(":path, :authority and :method must not be empty")
+		return nil, fmt.Errorf("the pseudo headers :path, :authority and :method are obligatory")
+	}
+
+	if hdr.Protocol != "" {
+		return nil, fmt.Errorf("extended connect is not yet implemented")
 	}
 
 	u, err := url.ParseRequestURI(hdr.Path)

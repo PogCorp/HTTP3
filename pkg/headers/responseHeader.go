@@ -1,21 +1,22 @@
 package headers
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 	qpack "poghttp3/pkg/qpack"
 	"strconv"
 )
 
+// NOTE: client side operation, therefore not needed for the moment
 func NewHttpResponseFromHeaderFields(headerFields []qpack.HeaderField) (*http.Response, error) {
-	hdr, err := NewHeaderFromHeaderFields(headerFields, false)
+	hdr, err := parseHeaderFromHeaderFields(headerFields, false)
 	if err != nil {
 		return nil, err
 	}
 
 	if hdr.Status == "" {
-		return nil, errors.New("Missing status field")
+		// see section 4.3.2 RFC 9114
+		return nil, fmt.Errorf("Obligatory pseudo header :status missing in response")
 	}
 
 	status, err := strconv.Atoi(hdr.Status)
