@@ -6,6 +6,7 @@ import (
 	qpack "poghttp3/pkg/qpack"
 	"strconv"
 	"strings"
+	"sync"
 
 	"golang.org/x/net/http/httpguts"
 )
@@ -23,11 +24,11 @@ type Header struct {
 }
 
 // all header fields must be lowercase
-func validField(fieldName string) bool {
+func validHeaderField(fieldName string) bool {
 	return strings.ToLower(fieldName) == fieldName
 }
 
-func IsPseudo(headerField qpack.HeaderField) bool {
+func IsPseudoHeader(headerField qpack.HeaderField) bool {
 	return len(headerField.Name) != 0 && headerField.Name[0] == ':'
 }
 
@@ -35,76 +36,88 @@ func (hdr *Header) IsResponseHeader() bool {
 	return hdr.Status != ""
 }
 
-var pseudoHeaderHandlers = map[string]func(*Header, qpack.HeaderField){
-	":path":      func(hdr *Header, headerField qpack.HeaderField) { hdr.Path = headerField.Value },
-	":method":    func(hdr *Header, headerField qpack.HeaderField) { hdr.Method = headerField.Value },
-	":authority": func(hdr *Header, headerField qpack.HeaderField) { hdr.Authority = headerField.Value },
-	":protocol":  func(hdr *Header, headerField qpack.HeaderField) { hdr.Protocol = headerField.Value },
-	":scheme":    func(hdr *Header, headerField qpack.HeaderField) { hdr.Scheme = headerField.Value },
-	":status":    func(hdr *Header, headerField qpack.HeaderField) { hdr.Status = headerField.Value },
-}
-
-func validPseudoHeader(h *Header, isRequest bool) (bool, string) {
+func validPseudoHeader(h *Header, isRequest bool) (bool, error) {
+	// only valid pseudo header in response (see section 4.3.2 of RFC 9114)
 	isResponsePseudoHeader := (h.Status != "")
 
 	if isRequest && isResponsePseudoHeader {
-		return false, "invalid request pseudo header: %s"
+		return false, fmt.Errorf("Got pseudoheader ':status' in Request")
 	}
 	if !isRequest && !isResponsePseudoHeader {
-		return false, "invalid response pseudo header: %s"
+		return false, fmt.Errorf("Got Request pseudo header in Response")
 	}
 
-	return true, ""
+	return true, nil
 }
 
-func NewHeaderFromHeaderFields(headerFields []qpack.HeaderField, isRequest bool) (*Header, error) {
+func parseHeaderFromHeaderFields(headerFields []qpack.HeaderField, isRequest bool) (*Header, error) {
 	header := &Header{
 		Header: make(http.Header, len(headerFields)),
 	}
 
-	var readContentLength bool
-	var contentLengthStr = ""
+	readContentLength := false
 
 	for _, hf := range headerFields {
-		if IsPseudo(hf) {
-			if !validField(hf.Name) {
-				return nil, fmt.Errorf("Invalid header field name: %s\n", hf.Name)
+		if !validHeaderField(hf.Name) {
+			return nil, fmt.Errorf("Got invalid header field name: %s\n", hf.Name)
+		}
+
+		if !httpguts.ValidHeaderFieldValue(hf.Value) {
+			return nil, fmt.Errorf("Got invalid header field value for %s: %s", hf.Name, hf.Value)
+		}
+
+		if IsPseudoHeader(hf) {
+			ok, err := validPseudoHeader(header, isRequest)
+			if !ok {
+				return nil, fmt.Errorf("%s, Field Name: %s", err, hf.Name)
 			}
 
-			if handlePseudoHeader, ok := pseudoHeaderHandlers[hf.Name]; ok {
-				handlePseudoHeader(header, hf)
-			} else {
-				return nil, fmt.Errorf("Unknown pseudo header: %s\n", hf.Name)
+			switch hf.Name {
+			case ":path":
+				header.Path = hf.Value
+			case ":method":
+				header.Method = hf.Value
+			case ":authority":
+				header.Authority = hf.Value
+			case ":protocol":
+				header.Protocol = hf.Value
+			case ":scheme":
+				header.Scheme = hf.Value
+			case ":status":
+				header.Status = hf.Value
+			default:
+				return nil, fmt.Errorf("undefined pseudo header: %s", hf.Name)
 			}
 
-			valid, errorMessage := validPseudoHeader(header, isRequest)
-			if !valid {
-				return nil, fmt.Errorf(errorMessage, hf.Name)
-			}
 		} else {
+			if !httpguts.ValidHeaderFieldName(hf.Name) {
+				return nil, fmt.Errorf("Got header field name for %s: %s", hf.Name, hf.Value)
+			}
+
 			if hf.Name == "content-length" {
-				if !readContentLength {
+				// add Content Length value only once
+				err := sync.OnceValue(func() error {
+					cl, err := strconv.ParseUint(hf.Value, 10, 63)
+					if err != nil {
+						return fmt.Errorf("failed to parse Content-Length value, err: %s", err)
+					}
+					header.Header.Set("Content-Length", hf.Value)
+					header.ContentLength = int64(cl)
 					readContentLength = true
-					contentLengthStr = hf.Value
+					return nil
+				})()
+				if err != nil {
+					return nil, err
+				}
+				// check for inconsistency with duplicate Content-Length's since it MAY be
+				// accepted (see section 8.6 RFC 9110)
+				if readContentLength && hf.Value != header.Header.Get("Content-Length") {
+					return nil, fmt.Errorf("two different instances of Content-Length received")
 				}
 			} else {
 				header.Header.Add(hf.Name, hf.Value)
 			}
-
 		}
-
-		if !httpguts.ValidHeaderFieldValue(hf.Value) {
-			return nil, fmt.Errorf("Invalid header field value for %s: %q", hf.Name, hf.Value)
-		}
-	}
-
-	if len(contentLengthStr) > 0 {
-		cl, err := strconv.ParseUint(contentLengthStr, 10, 63)
-		if err != nil {
-			return nil, fmt.Errorf("invalid content length: %+v", err)
-		}
-		header.Header.Set("Content-Length", contentLengthStr)
-		header.ContentLength = int64(cl)
 	}
 
 	return header, nil
