@@ -3,9 +3,6 @@ package http3streams
 import (
 	"bytes"
 	"errors"
-	"go/parser"
-
-	//"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +10,7 @@ import (
 	qpackApi "poghttp3/pkg/qpack"
 	qpack "poghttp3/pkg/qpack/quicgo"
 	adapter "poghttp3/pkg/quic"
+	"strings"
 )
 
 type Http3Stream interface{
@@ -28,6 +26,7 @@ type Http3Stream interface{
 
 type RequestStream struct{
 	QuicStream adapter.QuicBiStream //RequestStream uses bidirectional stream
+	QpackEncoder qpackApi.QpackApi
 }
 
 
@@ -45,8 +44,9 @@ func (s *RequestStream) SendHeaders(headers http.Header) (int, error){
 	// headers are key value pairs, and a key like cookie can have multiple values
 	//hence we iterate through them all
 	for name, values := range headers{
+		lowerCaseName := strings.ToLower(name) //rfc states that characters in field names must be lowercased before encoding
 		for _, value := range values{
-			headerFields = append(headerFields, qpackApi.HeaderField{Name: name, Value: value})
+			headerFields = append(headerFields, qpackApi.HeaderField{Name: lowerCaseName, Value: value})
 		}
 	}
 
@@ -103,25 +103,71 @@ func (s *RequestStream) Close(reason adapter.ApplicationError){
 
 
 
-func (s *RequestStream) ReadData(reader io.Reader) ([]frame.Frame, error){
+func (s *RequestStream) ReadData(data []byte) (int, error){
+	// each cal to this function fills up the buffer for incremental processing
 	// receive raw data from the quic streams
-	// uses the frame parser to decode each frame, and returns them
+	// uses the frame parser to decode each frame.
+	// error validation
+	reader := bytes.NewReader(data)
 	parser := frame.NewFrameParser(reader)
-	var frames []frame.Frame
-
-	for{
-		parsedFrame, err := parser.ParseNextFrame()
-		if err != nil{
-			if errors.Is(err, io.EOF){
-				// end of the readers, just return
-				return frames, nil
+	trailerRcv := false
+	var bytesInFrame uint64
+	
+	// loop to process the next frame
+	// only if the current frame is empty. 
+	if bytesInFrame == 0{
+	parser:	
+		for{
+			parsedFrame, err := parser.ParseNextFrame()
+			if err != nil{
+				// if it is an EOF error, the stream has been fully ReadData
+				if errors.Is(err, io.EOF){
+					return 0, io.EOF
+				}
+					return 0,fmt.Errorf("Failed to parse frame: %w", err)
 			}
-			//else, some other error happened while decoding
-			return nil, fmt.Errorf("Error decoding HTTP/3 frames: %w", err)
+
+			// processing each frames
+			switch frame := parsedFrame.(type) {
+			case *frame.DataFrame:
+				// if a data frames is received after a trailer, this is an error condition
+				if trailerRcv{
+					return 0, errors.New("DATA frame received after trailers")
+				}
+				bytesInFrame = frame.Length
+				break parser
+			
+			case *frame.HeadersFrame:
+				if trailerRcv{
+					return 0, errors.New("HEADER frame received after trailers")
+				}
+				trailerRcv = true // after the header was received, only trailers will be allowed (after data)
+				
+			default:
+				s.QuicStream.Close(0x0)
+				return 0, fmt.Errorf("Unexpected frame type: %T", frame)
+				}
+			}
 		}
-		// collecting the decoded frames
-		frames = append(frames, parsedFrame)
-	}	
+	
+
+	// parcial reading of the current frame ReadData
+	var n int
+	var err error = nil
+	var bytesRead int
+
+	if bytesInFrame < uint64(len(data)){
+		//ajusting the buffer to read only the necessary
+		n, err = reader.Read(data[:bytesInFrame]) // reads what is left
+	}else{
+		// if the frame is full, read it all
+		n, err = reader.Read(data)
+	}
+
+	bytesInFrame -= uint64(n)
+	bytesRead += n
+
+	return bytesRead, err
 }
 
 
