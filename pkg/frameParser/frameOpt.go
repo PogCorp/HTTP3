@@ -113,9 +113,9 @@ func StreamTypeExtractor(r io.Reader) (adapter.StreamType, error) {
 
 // -------------------- HEADERS FRAME OPERATIONS ----------------------
 
-func NewHeadersFrame(headers qpack.HeaderField, q qpack.QpackApi) (*HeadersFrame, error) {
+func NewHeadersFrame(q qpack.QpackApi, headers ...qpack.HeaderField) (*HeadersFrame, error) {
 	buffer := bytes.Buffer{}
-	err := q.Encode(&buffer, headers)
+	err := q.Encode(&buffer, headers...)
 	if err != nil {
 		return nil, err
 	}
