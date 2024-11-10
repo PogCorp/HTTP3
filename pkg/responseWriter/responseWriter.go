@@ -1,23 +1,23 @@
 package responseWriter
 
 import (
-	"bytes"
 	"fmt"
 	"log/slog"
 	"net/http"
 	http3streams "poghttp3/pkg/http3Streams"
+	"strconv"
 	"time"
 )
 
 type responseWriter struct {
-	stream        http3streams.Http3Stream // now using an http3 stream to send the frames
-	headers       http.Header
-	statusCode    int
-	headerWritten bool
-	contentLength int64
-	bytesWriten   int64
-	Buffer        bytes.Buffer
-	logger        *slog.Logger
+	stream            http3streams.Http3Stream // now using an http3 stream to send the frames
+	headers           http.Header
+	statusCode        int
+	writeHeaderCalled bool
+	headerWritten     bool
+	contentLength     uint64
+	bytesWriten       int64
+	logger            *slog.Logger
 }
 
 var _ http.ResponseWriter = &responseWriter{}
@@ -30,8 +30,6 @@ func NewResponseWriter(stream http3streams.Http3Stream, logger *slog.Logger) *re
 	}
 }
 
-// implementing the http.ResponseWriter interface Header(), Write([]byte), WriteHeader(int)
-
 // returns the header map that will be sent by WriteHeader
 func (w *responseWriter) Header() http.Header {
 	return w.headers
@@ -43,6 +41,15 @@ func (w *responseWriter) HeadersWritten() bool {
 
 func (w *responseWriter) LengthWritten() int64 {
 	return w.bytesWriten
+}
+
+// copied from quic-go/http3/response_writter
+func (w *responseWriter) detectContent(b []byte) {
+	_, hasContentLength := w.headers["Content-Length"]
+	hasContentEncoding := w.headers.Get("Content-Encoding") != ""
+	if !hasContentEncoding && !hasContentLength && len(b) > 0 {
+		w.headers.Set("Content-Type", http.DetectContentType(b))
+	}
 }
 
 // this method configures the status code and creates the header frame that will be sent over the stream
@@ -72,17 +79,27 @@ func (w *responseWriter) WriteHeader(statusCode int) {
 		return
 	}
 
-	w.headerWritten = true // if status code >= 200, we are done writing headers
-
 	// adding a date header if not present
 	if _, ok := w.headers["Date"]; !ok {
 		w.headers.Set("Date", time.Now().UTC().Format(http.TimeFormat))
 	}
 
-	//TODO: missing Content-Length attribution
-
-	// we defer the creating of the header frame to the Write method
-
+	w.writeHeaderCalled = true // if status code >= 200, we are done writing headers
+	if contentLength := w.headers.Get("Content-Length"); contentLength != "" {
+		length, err := strconv.ParseUint(contentLength, 10, 63)
+		if err != nil {
+			if w.logger != nil {
+				w.logger.Error(
+					"Content-Length does not have correct format",
+					"Content-Length", contentLength,
+					"error", err,
+				)
+			}
+			w.headers.Del("Content-Length")
+			return
+		}
+		w.contentLength = length
+	}
 }
 
 // writes the data to the connection
@@ -91,8 +108,8 @@ func (w *responseWriter) Write(data []byte) (int, error) {
 	// check if for the given status, a body is permitted
 
 	// if all headers are not written, call WriteHeader with status 200 by default
-	if !w.headerWritten {
-		w.WriteHeader(http.StatusOK) // default
+	if !w.writeHeaderCalled {
+		w.WriteHeader(http.StatusOK) // default defined in net/http#ResponseWriter
 	}
 
 	// checking if the method allows a body
@@ -104,20 +121,25 @@ func (w *responseWriter) Write(data []byte) (int, error) {
 	}
 
 	//sending the headers trough the http3 stream
-	if err := w.stream.SendHeader(w.statusCode, w.headers); err != nil {
-		return 0, fmt.Errorf("Failed to send headers: %w", err)
+	if !w.headerWritten {
+		w.detectContent(data)
+		if err := w.stream.SendHeader(w.statusCode, w.headers); err != nil {
+			return 0, fmt.Errorf("Failed to send headers: %w", err)
+		}
 	}
+	w.headerWritten = true
 
 	w.bytesWriten += int64(len(data))
-	if w.contentLength != 0 && w.bytesWriten > w.contentLength {
+
+	// TODO: there might be a bug in the conversion bellow, since contentLength can be big enough to be negative
+	if w.contentLength > 0 && w.bytesWriten > int64(w.contentLength) {
 		return 0, http.ErrContentLength
 	}
 
-	w.Buffer.Write(data)
-
-	if _, err := w.stream.SendBody(w.Buffer.Bytes()); err != nil {
+	n, err := w.stream.SendBody(data)
+	if err != nil {
 		return 0, fmt.Errorf("Failed to send data chunk: %w", err)
 	}
 
-	return len(data), nil
+	return n, nil
 }

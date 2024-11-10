@@ -212,13 +212,24 @@ func (s *Server) OnReadBiStream(conn adapter.QuicConn, stream adapter.QuicBiStre
 			if _, hasContentLength := header["Content-Length"]; !hasContentLength {
 				header.Set("Content-Length", strconv.FormatInt(responseWritter.LengthWritten(), 10))
 			}
+			_, err = responseWritter.Write(nil) //
+			if err != nil {
+				if s.logger != nil {
+					s.logger.Debug("failed to send response", "stream ID", stream.ID(), "error", err)
+				}
+			}
 		}
 	}
 
-	httpStream.SendTrailers()
-	httpStream.CloseRead(http3errors.NoError) // similar to shutdown(fd, SHUT_RD)
+	err = httpStream.SendTrailers()
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Debug("failed to send trailers", "stream ID", stream.ID(), "error", err)
+		}
+	}
 
-	stream.WriteFin() // writes the FIN packet of QUIC, marking the end of the interaction
+	httpStream.CloseRead(http3errors.NoError) // similar to shutdown(fd, SHUT_RD)
+	stream.WriteFin()                         // writes the FIN packet of QUIC, marking the end of the interaction
 }
 
 func (s *Server) OnCanceledConn(conn adapter.QuicConn) {

@@ -50,8 +50,8 @@ func (m *MockConn) CreateUniStream(streamType adapter.StreamType) (adapter.QuicU
 }
 
 func TestControlStreamHandler(t *testing.T) {
-	decoder := qpack.NewQuicGoQpackEncoder()
-	server := NewServer("localhost:8080", decoder, nil)
+	factory := &qpack.QuicGoQpackFactory{}
+	server := NewServer("localhost:8080", factory, nil)
 	conn := &MockConn{}
 
 	var testData = []struct {
@@ -81,8 +81,8 @@ func TestControlStreamHandler(t *testing.T) {
 }
 
 func TestReadUnidirectionalControlStream(t *testing.T) {
-	decoder := qpack.NewQuicGoQpackEncoder()
-	server := NewServer("localhost:8080", decoder, nil)
+	factory := &qpack.QuicGoQpackFactory{}
+	server := NewServer("localhost:8080", factory, nil)
 	conn := &MockConn{}
 	var testData = []struct {
 		input []byte
