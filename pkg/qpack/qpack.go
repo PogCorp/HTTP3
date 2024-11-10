@@ -11,3 +11,7 @@ type HeaderField struct {
 	Name  string
 	Value string
 }
+
+type Factory interface {
+	CreateEncoderDecoder() QpackApi
+}

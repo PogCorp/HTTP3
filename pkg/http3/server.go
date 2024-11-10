@@ -1,6 +1,7 @@
 package http3
 
 import (
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -8,8 +9,12 @@ import (
 	"poghttp3/pkg/headers"
 	http3errors "poghttp3/pkg/http3/errors"
 	requestbody "poghttp3/pkg/http3/requestBody"
+	http3streams "poghttp3/pkg/http3Streams"
 	qpack "poghttp3/pkg/qpack"
 	adapter "poghttp3/pkg/quic"
+	"poghttp3/pkg/responseWriter"
+	"runtime"
+	"strconv"
 )
 
 const (
@@ -28,21 +33,21 @@ type Settings struct {
 }
 
 type Server struct {
-	Addr    string
-	Handler http.Handler
-	decoder qpack.QpackApi
+	Addr           string
+	Handler        http.Handler
+	decoderFactory qpack.Factory
 
 	logger      *slog.Logger
 	connections map[adapter.QuicConn]*connection
 }
 
-func NewServer(addr string, decoder qpack.QpackApi, handler http.Handler) *Server {
+func NewServer(addr string, decoderFactory qpack.Factory, handler http.Handler) *Server {
 	return &Server{
-		Addr:        addr,
-		Handler:     handler,
-		decoder:     decoder,
-		logger:      slog.Default(),
-		connections: make(map[adapter.QuicConn]*connection),
+		Addr:           addr,
+		Handler:        handler,
+		decoderFactory: decoderFactory,
+		logger:         slog.Default(),
+		connections:    make(map[adapter.QuicConn]*connection),
 	}
 }
 
@@ -53,7 +58,7 @@ func (s *Server) OnNewUniStream(conn adapter.QuicConn, id adapter.StreamId) {
 }
 
 func (s *Server) OnReadUniStream(conn adapter.QuicConn, id adapter.StreamId, reader io.Reader) {
-	serverConn, ok := s.connections[conn]
+	httpConn, ok := s.connections[conn]
 	if !ok {
 		panic("server connection was not registred and on new unidirection stream was called out of order")
 	}
@@ -67,13 +72,13 @@ func (s *Server) OnReadUniStream(conn adapter.QuicConn, id adapter.StreamId, rea
 
 	switch streamType {
 	case ControlStream:
-		if swapped := serverConn.receivedControl.CompareAndSwap(false, true); !swapped {
+		if swapped := httpConn.receivedControl.CompareAndSwap(false, true); !swapped {
 			conn.Close(http3errors.StreamCreationError)
 			return
 		}
 		s.handleControlStream(conn, id, reader)
 	case QPackEncoder:
-		if swapped := serverConn.receivedQPackEncoder.CompareAndSwap(false, true); !swapped {
+		if swapped := httpConn.receivedQPackEncoder.CompareAndSwap(false, true); !swapped {
 			conn.Close(http3errors.StreamCreationError)
 			return
 		}
@@ -92,6 +97,11 @@ func (s *Server) OnNewBiStream(conn adapter.QuicConn, stream adapter.QuicBiStrea
 }
 
 func (s *Server) OnReadBiStream(conn adapter.QuicConn, stream adapter.QuicBiStream, reader io.Reader) {
+	httpConn, ok := s.connections[conn]
+	if !ok {
+		panic(fmt.Sprintf("no http connection created for %s", conn.String()))
+	}
+
 	parser := frames.NewFrameParser(reader)
 	frame, err := parser.ParseNextFrame()
 	if err != nil {
@@ -110,7 +120,7 @@ func (s *Server) OnReadBiStream(conn adapter.QuicConn, stream adapter.QuicBiStre
 		return
 	}
 
-	hdr, err := s.decoder.Decode(headerFrame.Headers)
+	hdr, err := httpConn.qpackDecoder.Decode(headerFrame.Headers)
 	if err != nil {
 		if s.logger != nil {
 			s.logger.Debug("in bidirectional failed to decode header frame", "stream ID", stream.ID(), "error", err)
@@ -134,14 +144,14 @@ func (s *Server) OnReadBiStream(conn adapter.QuicConn, stream adapter.QuicBiStre
 		contentLength = request.ContentLength
 	}
 
-	// TODO: configure http3 stream
+	httpStream := http3streams.NewRequestStream(reader, stream, httpConn.qpackDecoder)
 
 	var body io.ReadCloser
 	switch true {
 	case contentLength == 0:
-		// TODO: add io.ReaderCloser that does nothing
+		body = &requestbody.NoContentBody{Stream: httpStream}
 	case contentLength > 0:
-		body, err = requestbody.NewRequestBody(stream, reader, contentLength)
+		body, err = requestbody.NewRequestBody(httpStream, contentLength)
 		if err != nil {
 			panic("request body received non-positive value in positive switch clause")
 		}
@@ -205,9 +215,10 @@ func (s *Server) OnNewConnection(conn adapter.QuicConn) {
 		return
 	}
 
-	// TODO: create decoder and insert it into connection once dynamic table is supported
+	decoder := s.decoderFactory.CreateEncoderDecoder()
 
 	s.connections[conn] = &connection{
 		controlStream: stream,
+		qpackDecoder:  decoder,
 	}
 }
