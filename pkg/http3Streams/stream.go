@@ -114,6 +114,10 @@ func (s *RequestStream) SendHeader(status int, header http.Header) error {
 }
 
 func (s *RequestStream) SendBody(data []byte) (int, error) {
+	if len(data) == 0 {
+		return 0, nil
+	}
+
 	// creating the DATA frame with the provided content
 	dataFrame := &frame.DataFrame{
 		Length: uint64(len(data)),
