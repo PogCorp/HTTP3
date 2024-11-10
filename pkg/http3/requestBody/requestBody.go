@@ -4,24 +4,22 @@ import (
 	"fmt"
 	"io"
 	http3errors "poghttp3/pkg/http3/errors"
-	adapter "poghttp3/pkg/quic"
+	http3streams "poghttp3/pkg/http3Streams"
 	"sync"
 )
 
 type requestBody struct {
-	biStream adapter.QuicBiStream
-	stream   io.Reader
+	stream http3streams.Http3Stream
 	// invariant, contentLength must be positive
 	contentLength    int64
 	bytesToBeRead    int64
 	violationHandler func()
 }
 
-var _ RequestBody = (*requestBody)(nil)
+var _ io.ReadCloser = &requestBody{}
 
 func NewRequestBody(
-	biStream adapter.QuicBiStream,
-	stream io.Reader,
+	stream http3streams.Http3Stream,
 	contentLength int64,
 ) (RequestBody, error) {
 	if contentLength <= 0 {
@@ -29,18 +27,17 @@ func NewRequestBody(
 	}
 
 	return &requestBody{
-		biStream:      biStream,
 		stream:        stream,
 		contentLength: contentLength,
 		bytesToBeRead: contentLength,
 		violationHandler: sync.OnceFunc(func() {
-			biStream.Close(http3errors.MessageError)
+			stream.Close(http3errors.MessageError)
 		}),
 	}, nil
 }
 
 func (rb *requestBody) Close() error {
-	rb.biStream.CloseRead(http3errors.RequestCancelled)
+	rb.stream.CloseRead(http3errors.RequestCancelled)
 	return nil
 }
 
@@ -67,12 +64,7 @@ func (rb *requestBody) Read(b []byte) (n int, err error) {
 }
 
 func (rb *requestBody) violatedContentLength() bool {
-	// TODO: change the reader to an HTTP3 Stream that must have a method to tell
-	//		if there is more data to be read, thus making validation of
-	//		content lenght possible
-	//		Also, BiStream will not be necessary in this case, since it will be
-	//		wrapped under HTTP3 Stream
-	if rb.bytesToBeRead < 0 {
+	if rb.bytesToBeRead < 0 || rb.bytesToBeRead == 0 && rb.stream.HasRemainingData() {
 		return true
 	}
 	return false

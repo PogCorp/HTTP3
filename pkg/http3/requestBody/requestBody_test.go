@@ -2,8 +2,42 @@ package requestbody
 
 import (
 	"bytes"
+	"io"
+	"net/http"
+	http3streams "poghttp3/pkg/http3Streams"
+	adapter "poghttp3/pkg/quic"
 	"testing"
 )
+
+type mockStream struct {
+	*bytes.Reader
+	closeCalled bool
+}
+
+var _ http3streams.Http3Stream = &mockStream{}
+
+func (m *mockStream) Close(reason adapter.ApplicationError) {
+	m.closeCalled = true
+}
+
+func (m *mockStream) CloseRead(reason adapter.ApplicationError) {
+}
+
+func (m *mockStream) HasRemainingData() bool {
+	return m.Reader.Len() > 0
+}
+
+func (m *mockStream) SendTrailers() error {
+	return nil
+}
+
+func (m *mockStream) SendBody(b []byte) (int, error) {
+	return 0, nil
+}
+
+func (m *mockStream) SendHeader(status int, headers http.Header) error {
+	return nil
+}
 
 func TestRequestBodyReadAllContentLength(t *testing.T) {
 	tests := []struct {
@@ -25,7 +59,7 @@ func TestRequestBodyReadAllContentLength(t *testing.T) {
 
 	for _, test := range tests {
 		reader := bytes.NewReader(test.data)
-		body, err := NewRequestBody(nil, reader, int(test.length))
+		body, err := NewRequestBody(&mockStream{Reader: reader}, int64(test.length))
 		if err != nil {
 			t.Fatal("Violated request body invariants")
 		}
@@ -73,7 +107,7 @@ func TestRequestBodyReadPartition(t *testing.T) {
 
 		reader := bytes.NewReader(test.data)
 
-		body, err := NewRequestBody(nil, reader, int(test.length))
+		body, err := NewRequestBody(&mockStream{Reader: reader}, int64(test.length))
 		if err != nil {
 			t.Fatal("Violated request body invariants")
 		}
