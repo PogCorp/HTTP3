@@ -12,9 +12,8 @@ import (
 type responseWriter struct {
 	stream        http3streams.Http3Stream // now using an http3 stream to send the frames
 	headers       http.Header
-	trailers      http.Header // FIX: headers contain the trailers, such a element has no effect on the protocol
 	statusCode    int
-	writen        bool
+	headerWritten bool
 	contentLength int64
 	bytesWriten   int64
 	Buffer        bytes.Buffer
@@ -38,10 +37,18 @@ func (w *responseWriter) Header() http.Header {
 	return w.headers
 }
 
+func (w *responseWriter) HeadersWritten() bool {
+	return w.headerWritten
+}
+
+func (w *responseWriter) LengthWritten() int64 {
+	return w.bytesWriten
+}
+
 // this method configures the status code and creates the header frame that will be sent over the stream
 func (w *responseWriter) WriteHeader(statusCode int) {
 
-	if w.writen {
+	if w.headerWritten {
 		// all headers and status already written. No further action needed.
 		return
 	}
@@ -56,7 +63,7 @@ func (w *responseWriter) WriteHeader(statusCode int) {
 	// if te status code is 1xx, this is an interim response (HTTP, section 15.2)
 	// so we write them directly
 	if statusCode < 200 {
-		_, err := w.stream.SendHeader(statusCode, w.headers)
+		err := w.stream.SendHeader(statusCode, w.headers)
 		if err != nil {
 			if w.logger != nil {
 				w.logger.Debug("failed to send headers", "error", err)
@@ -65,7 +72,7 @@ func (w *responseWriter) WriteHeader(statusCode int) {
 		return
 	}
 
-	w.writen = true // if status code >= 200, we are done writing headers
+	w.headerWritten = true // if status code >= 200, we are done writing headers
 
 	// adding a date header if not present
 	if _, ok := w.headers["Date"]; !ok {
@@ -84,7 +91,7 @@ func (w *responseWriter) Write(data []byte) (int, error) {
 	// check if for the given status, a body is permitted
 
 	// if all headers are not written, call WriteHeader with status 200 by default
-	if !w.writen {
+	if !w.headerWritten {
 		w.WriteHeader(http.StatusOK) // default
 	}
 
@@ -97,7 +104,7 @@ func (w *responseWriter) Write(data []byte) (int, error) {
 	}
 
 	//sending the headers trough the http3 stream
-	if _, err := w.stream.SendHeader(w.statusCode, w.headers); err != nil {
+	if err := w.stream.SendHeader(w.statusCode, w.headers); err != nil {
 		return 0, fmt.Errorf("Failed to send headers: %w", err)
 	}
 
@@ -110,13 +117,6 @@ func (w *responseWriter) Write(data []byte) (int, error) {
 
 	if _, err := w.stream.SendBody(w.Buffer.Bytes()); err != nil {
 		return 0, fmt.Errorf("Failed to send data chunk: %w", err)
-	}
-
-	// Headers sent, body sent. Now, if there are trailers, we send them in the end
-	if len(w.trailers) > 0 {
-		if _, err := w.stream.SendHeader(w.statusCode, w.trailers); err != nil {
-			return 0, fmt.Errorf("Failed to send trailers: %w", err)
-		}
 	}
 
 	return len(data), nil
