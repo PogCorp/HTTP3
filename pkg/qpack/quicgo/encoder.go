@@ -50,3 +50,12 @@ func (q *quicgoQpackEncoder) Decode(data []byte) ([]adapter.HeaderField, error) 
 
 	return result, nil
 }
+
+type QuicGoQpackFactory struct {
+}
+
+func (qp *QuicGoQpackFactory) CreateEncoderDecoder() adapter.QpackApi {
+	return &quicgoQpackEncoder{}
+}
+
+var _ adapter.Factory = &QuicGoQpackFactory{}

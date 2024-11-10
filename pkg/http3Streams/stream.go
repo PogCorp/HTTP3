@@ -25,6 +25,7 @@ type Http3Stream interface {
 	SendTrailers() error
 	HasRemainingData() bool
 	Close(reason adapter.ApplicationError)
+	CloseRead(reason adapter.ApplicationError)
 }
 
 type RequestStream struct {
@@ -231,4 +232,8 @@ func (s *RequestStream) SendTrailers() error {
 
 func (s *RequestStream) HasRemainingData() bool {
 	return s.remainingData > 0
+}
+
+func (s *RequestStream) CloseRead(reason adapter.ApplicationError) {
+	s.QuicStream.CloseRead(reason)
 }

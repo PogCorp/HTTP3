@@ -33,8 +33,8 @@ func ConfigureTLSConfig(tlsConf *tls.Config) *tls.Config {
 }
 
 func ListenAndServeTLS(addr, certFile, keyFile string, handler http.Handler) error {
-	decoder := qpack.NewQuicGoQpackEncoder()
-	server := http3.NewServer(addr, decoder, handler)
+	decoderFactory := &qpack.QuicGoQpackFactory{}
+	server := http3.NewServer(addr, decoderFactory, handler)
 	certficate, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
 		return err
