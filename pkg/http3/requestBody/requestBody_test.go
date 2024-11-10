@@ -130,3 +130,22 @@ func TestRequestBodyReadPartition(t *testing.T) {
 		}
 	}
 }
+
+func TestLengthViolations(t *testing.T) {
+	buffer := bytes.NewReader([]byte("test string"))
+	mockStream := &mockStream{Reader: buffer}
+	body, err := NewRequestBody(mockStream, 9)
+	if err != nil {
+		t.Fatalf("failed to instantiate new Request Body class")
+	}
+	data, err := io.ReadAll(body)
+	if err == nil {
+		t.Fatalf("expected to received error")
+	}
+	if !mockStream.closeCalled {
+		t.Fatalf("stream did not close after violation")
+	}
+	if !bytes.Equal(data, []byte("test stri")) {
+		t.Fatalf("expected 'test stri', got %s", data)
+	}
+}
