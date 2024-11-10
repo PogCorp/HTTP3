@@ -174,10 +174,51 @@ func (s *Server) OnReadBiStream(conn adapter.QuicConn, stream adapter.QuicBiStre
 		)
 	}
 
-	// TODO: configure response writter
+	handler := s.Handler
+	if handler == nil {
+		handler = http.DefaultServeMux
+	}
+	responseWritter := responseWriter.NewResponseWriter(httpStream, s.logger)
 
-	stream.CloseRead(http3errors.NoError) // similar to shutdown(fd, SHUT_RD)
-	stream.WriteFin()
+	hasPanicked := false
+	func() {
+		// Copied from quic-go/http/server
+		defer func() {
+			if p := recover(); p != nil {
+				hasPanicked = true
+				if p == http.ErrAbortHandler {
+					return
+				}
+
+				const size = 64 << 10
+				buf := make([]byte, size)
+				buf = buf[:runtime.Stack(buf, false)]
+				logger := s.logger
+				if logger == nil {
+					logger = slog.Default()
+				}
+				logger.Error("http: panic serving", "arg", p, "trace", string(buf))
+			}
+		}()
+		handler.ServeHTTP(responseWritter, request)
+	}()
+
+	if hasPanicked {
+		httpStream.Close(http3errors.InternalError)
+		return
+	} else {
+		if !responseWritter.HeadersWritten() {
+			header := responseWritter.Header()
+			if _, hasContentLength := header["Content-Length"]; !hasContentLength {
+				header.Set("Content-Length", strconv.FormatInt(responseWritter.LengthWritten(), 10))
+			}
+		}
+	}
+
+	httpStream.SendTrailers()
+	httpStream.CloseRead(http3errors.NoError) // similar to shutdown(fd, SHUT_RD)
+
+	stream.WriteFin() // writes the FIN packet of QUIC, marking the end of the interaction
 }
 
 func (s *Server) OnCanceledConn(conn adapter.QuicConn) {
