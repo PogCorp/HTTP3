@@ -31,7 +31,7 @@ func NewResponseWriter(stream http3streams.Http3Stream, logger *slog.Logger) *re
 	}
 }
 
-// implementing the http.ResponseWriter interface (Header(), Write([]byte), WriteHeader(int)
+// implementing the http.ResponseWriter interface Header(), Write([]byte), WriteHeader(int)
 
 // returns the header map that will be sent by WriteHeader
 func (w *responseWriter) Header() http.Header {
