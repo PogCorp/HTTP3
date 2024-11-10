@@ -23,6 +23,7 @@ type Http3Stream interface {
 	SendBody(data []byte) (int, error)
 	// trailers are the same as headers, but sent after the body.
 	SendTrailers() error
+	HasRemainingData() bool
 	Close(reason adapter.ApplicationError)
 }
 
@@ -86,7 +87,12 @@ func (s *RequestStream) SendHeader(status int, header http.Header) error {
 
 		lowerCaseName := strings.ToLower(name) //rfc states that characters in field names must be lowercased before encoding
 		for _, value := range values {
-			headerFields = append(headerFields, qpackApi.HeaderField{Name: lowerCaseName, Value: value})
+			headerFields = append(
+				headerFields,
+				qpackApi.HeaderField{
+					Name:  lowerCaseName,
+					Value: value,
+				})
 		}
 	}
 	headersFrame, err := frame.NewHeadersFrame(s.QpackEncoder, headerFields...)
@@ -221,4 +227,8 @@ func (s *RequestStream) SendTrailers() error {
 	_, err = s.QuicStream.Write(encodedFrame)
 
 	return err
+}
+
+func (s *RequestStream) HasRemainingData() bool {
+	return s.remainingData > 0
 }
