@@ -73,7 +73,7 @@ func NewQuicGoServerTLS(host string, tlsconfig *tls.Config, api adapter.QuicAPI)
 func (q *quicServer) Listen() error {
 
 	config := &quic.Config{
-		EnableDatagrams: true,
+		EnableDatagrams: false,
 		Tracer: func(ctx context.Context, p logging.Perspective, cid quic.ConnectionID) *logging.ConnectionTracer {
 			traceId := ctx.Value(quic.ConnectionTracingKey).(quic.ConnectionTracingID)
 			q.tracerToCid[traceId] = cid
