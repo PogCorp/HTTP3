@@ -35,8 +35,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	adapter "poghttp3/pkg/quic"
 	"unsafe"
+
+	adapter "github.com/PogCorp/HTTP3/pkg/quic"
 
 	gopointer "github.com/mattn/go-pointer"
 )

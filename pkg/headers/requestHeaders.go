@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	qpack "poghttp3/pkg/qpack"
 	"strings"
+
+	qpack "github.com/PogCorp/HTTP3/pkg/qpack"
 )
 
 func NewRequestFromHeaders(headerFields []qpack.HeaderField) (*http.Request, error) {

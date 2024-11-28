@@ -3,9 +3,10 @@ package headers
 import (
 	"net/http"
 	"net/url"
-	"poghttp3/pkg/qpack"
 	"reflect"
 	"testing"
+
+	"github.com/PogCorp/HTTP3/pkg/qpack"
 )
 
 func TestRequestParser(t *testing.T) {

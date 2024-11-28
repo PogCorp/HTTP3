@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
-	qpack "poghttp3/pkg/qpack"
-	adapter "poghttp3/pkg/quic"
+
+	adapter "github.com/PogCorp/HTTP3/pkg/quic"
+
+	qpack "github.com/PogCorp/HTTP3/pkg/qpack"
 )
 
 // varint encoding is used by RFC 9000

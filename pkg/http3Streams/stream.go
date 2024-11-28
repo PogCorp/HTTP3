@@ -6,13 +6,14 @@ import (
 	"io"
 	"net/http"
 	"net/textproto"
-	frame "poghttp3/pkg/frameParser"
-	http3errors "poghttp3/pkg/http3/errors"
-	qpackApi "poghttp3/pkg/qpack"
-	adapter "poghttp3/pkg/quic"
 	"reflect"
 	"strconv"
 	"strings"
+
+	frame "github.com/PogCorp/HTTP3/pkg/frameParser"
+	http3errors "github.com/PogCorp/HTTP3/pkg/http3/errors"
+	qpackApi "github.com/PogCorp/HTTP3/pkg/qpack"
+	adapter "github.com/PogCorp/HTTP3/pkg/quic"
 
 	"golang.org/x/net/http/httpguts"
 )

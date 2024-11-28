@@ -4,9 +4,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	http3streams "poghttp3/pkg/http3Streams"
 	"strconv"
 	"time"
+
+	http3streams "github.com/PogCorp/HTTP3/pkg/http3Streams"
 )
 
 type responseWriter struct {

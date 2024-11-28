@@ -2,7 +2,8 @@ package qpack
 
 import (
 	"io"
-	adapter "poghttp3/pkg/qpack"
+
+	adapter "github.com/PogCorp/HTTP3/pkg/qpack"
 
 	qpack "github.com/quic-go/qpack"
 )

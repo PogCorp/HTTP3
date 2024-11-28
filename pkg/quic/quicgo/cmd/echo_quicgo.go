@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"io"
 	"log"
-	adapter "poghttp3/pkg/quic"
-	"poghttp3/pkg/quic/quicgo"
+
+	"github.com/PogCorp/HTTP3/pkg/quic/quicgo"
+
+	adapter "github.com/PogCorp/HTTP3/pkg/quic"
 )
 
 type QuicGoAdapter struct {
