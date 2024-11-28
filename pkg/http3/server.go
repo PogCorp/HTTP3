@@ -5,16 +5,19 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	frames "poghttp3/pkg/frameParser"
-	"poghttp3/pkg/headers"
-	http3errors "poghttp3/pkg/http3/errors"
-	requestbody "poghttp3/pkg/http3/requestBody"
-	http3streams "poghttp3/pkg/http3Streams"
-	qpack "poghttp3/pkg/qpack"
-	adapter "poghttp3/pkg/quic"
-	"poghttp3/pkg/responseWriter"
 	"runtime"
 	"strconv"
+
+	http3errors "github.com/PogCorp/HTTP3/pkg/http3/errors"
+	requestbody "github.com/PogCorp/HTTP3/pkg/http3/requestBody"
+	http3streams "github.com/PogCorp/HTTP3/pkg/http3Streams"
+	qpack "github.com/PogCorp/HTTP3/pkg/qpack"
+	adapter "github.com/PogCorp/HTTP3/pkg/quic"
+	"github.com/PogCorp/HTTP3/pkg/responseWriter"
+
+	"github.com/PogCorp/HTTP3/pkg/headers"
+
+	frames "github.com/PogCorp/HTTP3/pkg/frameParser"
 )
 
 const (

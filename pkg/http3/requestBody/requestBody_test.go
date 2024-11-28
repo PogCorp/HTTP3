@@ -4,9 +4,10 @@ import (
 	"bytes"
 	"io"
 	"net/http"
-	http3streams "poghttp3/pkg/http3Streams"
-	adapter "poghttp3/pkg/quic"
 	"testing"
+
+	http3streams "github.com/PogCorp/HTTP3/pkg/http3Streams"
+	adapter "github.com/PogCorp/HTTP3/pkg/quic"
 )
 
 type mockStream struct {

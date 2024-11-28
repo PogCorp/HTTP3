@@ -1,9 +1,11 @@
 package http3
 
 import (
-	"poghttp3/pkg/qpack"
-	adapter "poghttp3/pkg/quic"
 	"sync/atomic"
+
+	adapter "github.com/PogCorp/HTTP3/pkg/quic"
+
+	"github.com/PogCorp/HTTP3/pkg/qpack"
 )
 
 type connection struct {

@@ -1,4 +1,4 @@
-module poghttp3
+module github.com/PogCorp/HTTP3
 
 go 1.23.0
 

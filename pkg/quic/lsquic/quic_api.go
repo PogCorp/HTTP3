@@ -3,7 +3,8 @@ package lsquic
 import (
 	"io"
 	"log"
-	adapter "poghttp3/pkg/quic"
+
+	adapter "github.com/PogCorp/HTTP3/pkg/quic"
 )
 
 // TODO:

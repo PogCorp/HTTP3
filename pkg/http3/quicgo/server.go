@@ -3,9 +3,12 @@ package quicgo
 import (
 	"crypto/tls"
 	"net/http"
-	"poghttp3/pkg/http3"
-	qpack "poghttp3/pkg/qpack/quicgo"
-	"poghttp3/pkg/quic/quicgo"
+
+	qpack "github.com/PogCorp/HTTP3/pkg/qpack/quicgo"
+
+	"github.com/PogCorp/HTTP3/pkg/quic/quicgo"
+
+	"github.com/PogCorp/HTTP3/pkg/http3"
 )
 
 func ConfigureTLSConfig(tlsConf *tls.Config) *tls.Config {

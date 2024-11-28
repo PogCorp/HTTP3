@@ -1,7 +1,7 @@
 package quicgo
 
 import (
-	adapter "poghttp3/pkg/quic"
+	adapter "github.com/PogCorp/HTTP3/pkg/quic"
 
 	"github.com/quic-go/quic-go"
 )

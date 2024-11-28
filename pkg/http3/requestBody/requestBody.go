@@ -3,9 +3,10 @@ package requestbody
 import (
 	"fmt"
 	"io"
-	http3errors "poghttp3/pkg/http3/errors"
-	http3streams "poghttp3/pkg/http3Streams"
 	"sync"
+
+	http3errors "github.com/PogCorp/HTTP3/pkg/http3/errors"
+	http3streams "github.com/PogCorp/HTTP3/pkg/http3Streams"
 )
 
 type requestBody struct {

@@ -2,9 +2,11 @@ package http3
 
 import (
 	"io"
-	frameparser "poghttp3/pkg/frameParser"
-	http3errors "poghttp3/pkg/http3/errors"
-	adapter "poghttp3/pkg/quic"
+
+	adapter "github.com/PogCorp/HTTP3/pkg/quic"
+
+	frameparser "github.com/PogCorp/HTTP3/pkg/frameParser"
+	http3errors "github.com/PogCorp/HTTP3/pkg/http3/errors"
 )
 
 func (s *Server) handleControlStream(conn adapter.QuicConn, id adapter.StreamId, reader io.Reader) {

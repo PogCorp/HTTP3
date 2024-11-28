@@ -4,8 +4,9 @@ import (
 	"flag"
 	"log"
 	"net/http"
-	"poghttp3/pkg/http3/quicgo"
 	"time"
+
+	"github.com/PogCorp/HTTP3/pkg/http3/quicgo"
 )
 
 func main() {

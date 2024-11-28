@@ -3,10 +3,12 @@ package frameparser
 import (
 	"bytes"
 	"io"
-	adapter "poghttp3/pkg/qpack"
-	qpack "poghttp3/pkg/qpack/quicgo"
 	"reflect"
 	"testing"
+
+	qpack "github.com/PogCorp/HTTP3/pkg/qpack/quicgo"
+
+	adapter "github.com/PogCorp/HTTP3/pkg/qpack"
 )
 
 // TEST: integration tests that test the interaction of encoding frames and decoding from them back

@@ -3,10 +3,11 @@ package headers
 import (
 	"fmt"
 	"net/http"
-	qpack "poghttp3/pkg/qpack"
 	"strconv"
 	"strings"
 	"sync"
+
+	qpack "github.com/PogCorp/HTTP3/pkg/qpack"
 
 	"golang.org/x/net/http/httpguts"
 )

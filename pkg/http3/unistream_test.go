@@ -2,10 +2,11 @@ package http3
 
 import (
 	"bytes"
-	qpack "poghttp3/pkg/qpack/quicgo"
 	adapter "poghttp3/pkg/quic"
 	"reflect"
 	"testing"
+
+	qpack "github.com/PogCorp/HTTP3/pkg/qpack/quicgo"
 )
 
 type MockUniStream struct {

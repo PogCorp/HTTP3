@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"log"
 	"net"
-	adapter "poghttp3/pkg/quic"
 	"time"
+
+	adapter "github.com/PogCorp/HTTP3/pkg/quic"
 
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/logging"

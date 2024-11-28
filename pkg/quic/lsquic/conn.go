@@ -11,7 +11,8 @@ import "C"
 
 import (
 	"fmt"
-	adapter "poghttp3/pkg/quic"
+
+	adapter "github.com/PogCorp/HTTP3/pkg/quic"
 )
 
 type QuicConn struct {

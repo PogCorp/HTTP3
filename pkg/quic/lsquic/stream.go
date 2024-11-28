@@ -11,8 +11,9 @@ package lsquic
 import "C"
 import (
 	"log"
-	adapter "poghttp3/pkg/quic"
 	"unsafe"
+
+	adapter "github.com/PogCorp/HTTP3/pkg/quic"
 )
 
 type QuicBiStream struct {
