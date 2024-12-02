@@ -15,7 +15,7 @@ To use it follow the next steps:
 ```
 cd ./example
 go build main.go
-./main
+./main -c /path/to/certificate.crt -k /path/to/private.key
 ```
 
 The program starts a HTTP server that returns the current time.
